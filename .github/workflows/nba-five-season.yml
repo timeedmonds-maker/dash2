@@ -1,0 +1,133 @@
+name: Build five-season centre on-off leaderboard
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4 lxml pandas numpy
+      - name: Scrape and aggregate five seasons
+        run: |
+          cat > build.py <<'PY'
+          import io,json,re,time,random,unicodedata
+          import numpy as np
+          import pandas as pd
+          import requests
+          from bs4 import BeautifulSoup,Comment
+
+          TEAMS=['ATL','BOS','BRK','CHO','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHO','POR','SAC','SAS','TOR','UTA','WAS']
+          YEARS=[2022,2023,2024,2025,2026]
+          HEADERS={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.basketball-reference.com/'}
+          s=requests.Session(); s.headers.update(HEADERS)
+          failures=[]; onoff=[]; rosters=[]
+
+          def clean_name(x):
+            x=str(x)
+            for _ in range(2):
+              try:
+                y=x.encode('latin1').decode('utf8')
+                if y!=x: x=y
+                else: break
+              except Exception: break
+            x=unicodedata.normalize('NFC',x)
+            x=re.sub(r'[\*†‡]+$','',x).strip()
+            return re.sub(r'\s+',' ',x)
+
+          def get(url,attempts=6):
+            err=None
+            for i in range(attempts):
+              try:
+                r=s.get(url,timeout=90)
+                if r.status_code==200 and len(r.content)>5000: return r.text
+                err=RuntimeError(f'status={r.status_code} len={len(r.content)}')
+              except Exception as e: err=e
+              time.sleep(5*(i+1)+random.uniform(.5,2))
+            raise err
+
+          def table(text,tid):
+            soup=BeautifulSoup(text,'lxml'); t=soup.find('table',id=tid)
+            if t is not None:return t
+            for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
+              if tid in c and '<table' in c:
+                t=BeautifulSoup(c,'lxml').find('table',id=tid)
+                if t is not None:return t
+            return None
+
+          def flat(df):
+            if isinstance(df.columns,pd.MultiIndex):
+              df.columns=[str(b) if str(a).startswith('Unnamed') else f'{a}_{b}' for a,b in df.columns]
+            else: df.columns=[str(c) for c in df.columns]
+            return df
+
+          for year in YEARS:
+            season=f'{year-1}-{str(year)[-2:]}'
+            for team in TEAMS:
+              print('FETCH',season,team,flush=True)
+              try:
+                text=get(f'https://www.basketball-reference.com/teams/{team}/{year}/on-off/')
+                t=table(text,'on_off')
+                if t is None: raise RuntimeError('on_off table not found')
+                d=flat(pd.read_html(io.StringIO(str(t)))[0])
+                d=d.rename(columns={'Player':'PLAYER','Split':'SPLIT','MP':'MIN','Team_Pace':'PACE','Team_ORtg':'OFF_RTG','Opponent_ORtg':'DEF_RTG','Difference_ORtg':'NET_RTG'})
+                d['PLAYER']=d['PLAYER'].ffill().map(clean_name)
+                d=d[d['SPLIT'].isin(['On Court','Off Court'])].copy()
+                for c in ['MIN','PACE','OFF_RTG','DEF_RTG','NET_RTG']: d[c]=pd.to_numeric(d[c],errors='coerce')
+                d['TEAM']=team; d['SEASON']=season
+                onoff.append(d[['PLAYER','SPLIT','MIN','PACE','OFF_RTG','DEF_RTG','NET_RTG','TEAM','SEASON']])
+              except Exception as e:
+                failures.append({'TYPE':'ONOFF','TEAM':team,'SEASON':season,'ERROR':repr(e)}); print('FAIL',repr(e),flush=True)
+              time.sleep(3.2+random.uniform(.1,.8))
+              try:
+                text=get(f'https://www.basketball-reference.com/teams/{team}/{year}.html')
+                t=table(text,'roster')
+                if t is None: raise RuntimeError('roster table not found')
+                d=flat(pd.read_html(io.StringIO(str(t)))[0])
+                pc=next(c for c in d.columns if c.lower()=='player'); posc=next(c for c in d.columns if c.lower()=='pos')
+                d=d[[pc,posc]].rename(columns={pc:'PLAYER',posc:'POS'})
+                d['PLAYER']=d['PLAYER'].map(clean_name); d['POS']=d['POS'].astype(str).str.upper().str.strip(); d['TEAM']=team; d['SEASON']=season
+                rosters.append(d)
+              except Exception as e:
+                failures.append({'TYPE':'ROSTER','TEAM':team,'SEASON':season,'ERROR':repr(e)}); print('FAIL ROSTER',repr(e),flush=True)
+              time.sleep(3.2+random.uniform(.1,.8))
+
+          raw=pd.concat(onoff,ignore_index=True); ros=pd.concat(rosters,ignore_index=True)
+          raw.to_csv('raw_bref_onoff_5seasons.csv',index=False); ros.to_csv('raw_bref_rosters_5seasons.csv',index=False); pd.DataFrame(failures).to_csv('failures.csv',index=False)
+          pos=ros.groupby('PLAYER',as_index=False).agg(POSITIONS=('POS',lambda x:'|'.join(sorted(set(v for v in x if v and v!='NAN')))))
+          pos['IS_CENTRE']=pos.POSITIONS.str.contains(r'(^|[-/])C($|[-/])|CENTER',regex=True,na=False)
+
+          def agg(split,p):
+            d=raw[raw.SPLIT==split].copy(); d['WEIGHT']=d.MIN*d.PACE/48
+            for c in ['OFF_RTG','DEF_RTG','NET_RTG']: d[c+'_W']=d[c]*d.WEIGHT
+            g=d.groupby('PLAYER',as_index=False).agg(MIN=('MIN','sum'),WEIGHT=('WEIGHT','sum'),OFF_W=('OFF_RTG_W','sum'),DEF_W=('DEF_RTG_W','sum'),NET_W=('NET_RTG_W','sum'),TEAMS=('TEAM',lambda x:','.join(sorted(set(x)))))
+            for c in ['OFF','DEF','NET']: g[f'{p}_{c}_RTG']=g[f'{c}_W']/g.WEIGHT
+            g[f'{p}_MIN']=g.MIN; g[f'{p}_TEAMS']=g.TEAMS
+            return g[['PLAYER',f'{p}_MIN',f'{p}_OFF_RTG',f'{p}_DEF_RTG',f'{p}_NET_RTG',f'{p}_TEAMS']]
+
+          a=agg('On Court','ON').merge(agg('Off Court','OFF'),on='PLAYER').merge(pos,on='PLAYER',how='left')
+          a['IS_CENTRE']=a.IS_CENTRE.fillna(False); a['ON_OFF_SWING']=a.ON_NET_RTG-a.OFF_NET_RTG
+          a['TEAMS']=a.apply(lambda r:','.join(sorted(set(str(r.ON_TEAMS).split(','))|set(str(r.OFF_TEAMS).split(',')))),axis=1)
+          a=a[(a.IS_CENTRE)&(a.ON_MIN>=3000)].sort_values(['ON_OFF_SWING','ON_MIN'],ascending=[False,False]).reset_index(drop=True)
+          a.insert(0,'RANK',np.arange(1,len(a)+1))
+          cols=['RANK','PLAYER','POSITIONS','TEAMS','ON_MIN','ON_OFF_RTG','ON_DEF_RTG','ON_NET_RTG','OFF_OFF_RTG','OFF_DEF_RTG','OFF_NET_RTG','ON_OFF_SWING']
+          a[cols].to_csv('centre_leaderboard_5seasons.csv',index=False)
+          json.dump({'seasons':['2021-22','2022-23','2023-24','2024-25','2025-26'],'onoff_team_seasons':len(onoff),'roster_team_seasons':len(rosters),'failures':len(failures),'qualifiers':len(a),'minimum_minutes':3000},open('summary.json','w'),indent=2)
+          print(a[cols].to_string(index=False),flush=True)
+          PY
+          python build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: centre-onoff-five-season-results
+          path: |
+            centre_leaderboard_5seasons.csv
+            raw_bref_onoff_5seasons.csv
+            raw_bref_rosters_5seasons.csv
+            failures.csv
+            summary.json
