@@ -13,56 +13,46 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install requests beautifulsoup4 lxml pandas openpyxl
-      - name: Aggregate 2024-25 and 2025-26 GP and GS
+      - run: pip install requests pandas openpyxl
+      - name: Aggregate 2024-25 and 2025-26 GP and GS from NBA stats
         run: |
           python - <<'PY'
-          import re,time,random,unicodedata,requests,pandas as pd
-          from bs4 import BeautifulSoup,Comment
-          PLAYERS=['Nikola Jokić', 'Victor Wembanyama', 'Moussa Diabaté', 'Zach Edey', 'Ivica Zubac', 'Joel Embiid', 'Steven Adams', 'Neemias Queta', 'Jarrett Allen', 'Bam Adebayo', 'Al Horford', 'Rudy Gobert', 'Donovan Clingan', 'Karl-Anthony Towns', 'Goga Bitadze', 'Isaiah Hartenstein', 'Jalen Duren', 'Wendell Carter Jr.', 'Jaxson Hayes', 'Jakob Poeltl', 'Onyeka Okongwu', 'Kristaps Porziņģis', 'Luke Kornet', 'Alperen Şengün', 'Clint Capela', 'Brook Lopez', "Kel'el Ware", 'Thomas Bryant', 'Isaiah Stewart']
+          import re,time,unicodedata,requests,pandas as pd
+          PLAYERS=['Nikola Jokić','Victor Wembanyama','Moussa Diabaté','Zach Edey','Ivica Zubac','Joel Embiid','Steven Adams','Neemias Queta','Jarrett Allen','Bam Adebayo','Al Horford','Rudy Gobert','Donovan Clingan','Karl-Anthony Towns','Goga Bitadze','Isaiah Hartenstein','Jalen Duren','Wendell Carter Jr.','Jaxson Hayes','Jakob Poeltl','Onyeka Okongwu','Kristaps Porziņģis','Luke Kornet','Alperen Şengün','Clint Capela','Brook Lopez',"Kel'el Ware",'Thomas Bryant','Isaiah Stewart']
           def norm(x):
             x=''.join(c for c in unicodedata.normalize('NFKD',str(x)) if not unicodedata.combining(c)).lower()
             return re.sub(r'[^a-z0-9]+','',x)
           target={norm(x):x for x in PLAYERS}
-          s=requests.Session(); s.headers.update({'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.basketball-reference.com/'})
-          rows=[]
-          for year in (2025,2026):
-            url=f'https://www.basketball-reference.com/leagues/NBA_{year}_per_game.html'
+          s=requests.Session(); s.headers.update({
+            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+            'Accept':'application/json, text/plain, */*','Accept-Language':'en-US,en;q=0.9',
+            'Origin':'https://www.nba.com','Referer':'https://www.nba.com/'})
+          endpoint='https://stats.nba.com/stats/leaguedashplayerstats'
+          def fetch(season,starterbench=''):
+            params={'College':'','Conference':'','Country':'','DateFrom':'','DateTo':'','Division':'','DraftPick':'','DraftYear':'','GameScope':'','GameSegment':'','Height':'','LastNGames':'0','LeagueID':'00','Location':'','MeasureType':'Base','Month':'0','OpponentTeamID':'0','Outcome':'','PORound':'0','PaceAdjust':'N','PerMode':'Totals','Period':'0','PlayerExperience':'','PlayerPosition':'','PlusMinus':'N','Rank':'N','Season':season,'SeasonSegment':'','SeasonType':'Regular Season','ShotClockRange':'','StarterBench':starterbench,'TeamID':'0','VsConference':'','VsDivision':'','Weight':''}
             for attempt in range(8):
-              r=s.get(url,timeout=90)
-              print('GET',year,attempt+1,r.status_code,len(r.content),flush=True)
-              if r.status_code==200 and len(r.content)>10000: break
-              time.sleep(6*(attempt+1)+random.uniform(1,3))
-            else: raise RuntimeError(f'failed {url}')
-            soup=BeautifulSoup(r.text,'lxml')
-            tables=[soup.find('table',id='per_game_stats'),soup.find('table',id='per_game')]
-            for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
-              if '<table' in c and ('per_game' in c or 'per_game_stats' in c):
-                frag=BeautifulSoup(c,'lxml'); tables += [frag.find('table',id='per_game_stats'),frag.find('table',id='per_game')]
-            table=next((t for t in tables if t is not None),None)
-            if table is None: raise RuntimeError(f'table missing {year}')
-            for tr in table.select('tbody tr'):
-              pc=tr.select_one('[data-stat="name_display"],[data-stat="player"]')
-              if pc is None: continue
-              key=norm(pc.get_text())
-              if key not in target: continue
-              def txt(stat):
-                c=tr.select_one(f'[data-stat="{stat}"]'); return c.get_text(strip=True) if c else ''
-              def val(stat):
-                try:return int(float(txt(stat).replace(',','')))
-                except:return 0
-              rows.append({'player':target[key],'season_end':year,'team':txt('team_name_abbr') or txt('team_id'),'gp':val('games'),'gs':val('games_started')})
-            time.sleep(random.uniform(2,4))
-          raw=pd.DataFrame(rows)
+              r=s.get(endpoint,params=params,timeout=120)
+              print('GET',season,starterbench or 'All',attempt+1,r.status_code,len(r.content),flush=True)
+              if r.status_code==200 and r.text.startswith('{'):
+                js=r.json(); rs=js['resultSets'][0]; return pd.DataFrame(rs['rowSet'],columns=rs['headers'])
+              time.sleep(8*(attempt+1))
+            raise RuntimeError(f'NBA stats failed {season} {starterbench}')
+          raw=[]
+          for season in ('2024-25','2025-26'):
+            all_df=fetch(season,'')
+            st_df=fetch(season,'Starters')
+            starts={norm(r['PLAYER_NAME']):int(r['GP']) for _,r in st_df.iterrows()}
+            for _,r in all_df.iterrows():
+              k=norm(r['PLAYER_NAME'])
+              if k in target:
+                raw.append({'player':target[k],'season':season,'gp':int(r['GP']),'gs':starts.get(k,0)})
+          raw=pd.DataFrame(raw)
           final=[]
-          for player in PLAYERS:
-            d=raw[raw.player==player].copy(); use=[]
-            for year,g in d.groupby('season_end'):
-              if (g.team=='TOT').any(): use.append(g[g.team=='TOT'].iloc[0])
-              else: use.extend([r for _,r in g.iterrows()])
-            u=pd.DataFrame(use); gp=int(u.gp.sum()) if not u.empty else 0; gs=int(u.gs.sum()) if not u.empty else 0
+          for p in PLAYERS:
+            d=raw[raw.player==p]
+            gp=int(d.gp.sum()) if not d.empty else 0; gs=int(d.gs.sum()) if not d.empty else 0
             pct=gs/gp if gp else None
-            final.append({'player':player,'gp_2024_25_to_2025_26':gp,'gs_2024_25_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':'Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')})
+            final.append({'player':p,'gp_2024_25_to_2025_26':gp,'gs_2024_25_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':'Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')})
           out=pd.DataFrame(final); missing=out[out.gp_2024_25_to_2025_26==0]
           raw.to_csv('centre_gp_gs_raw_2seasons.csv',index=False)
           out.to_csv('centre_gp_gs_summary_2seasons.csv',index=False)
@@ -81,4 +71,4 @@ jobs:
             centre_gp_gs_raw_2seasons.csv
             centre_gp_gs_missing_2seasons.csv
             centre_gp_gs_summary_2seasons.xlsx
-          if-no-files-found: warn
+          if-no-files-found: error
