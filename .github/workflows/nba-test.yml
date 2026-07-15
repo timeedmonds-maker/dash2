@@ -1,0 +1,50 @@
+name: NBA endpoint test
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Test NBA endpoint
+        run: |
+          python - <<'PY'
+          import requests, json
+          url='https://stats.nba.com/stats/teamplayeronoffdetails'
+          params={
+            'DateFrom':'','DateTo':'','GameSegment':'','LastNGames':'0','LeagueID':'00',
+            'Location':'','MeasureType':'Advanced','Month':'0','OpponentTeamID':'0',
+            'Outcome':'','PaceAdjust':'N','PerMode':'Per100Possessions','Period':'0',
+            'PlusMinus':'N','Rank':'N','Season':'2025-26','SeasonSegment':'',
+            'SeasonType':'Regular Season','TeamID':'1610612745','VsConference':'','VsDivision':''
+          }
+          headers={
+            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+            'Referer':'https://www.nba.com/','Origin':'https://www.nba.com',
+            'Accept':'application/json, text/plain, */*','Accept-Language':'en-US,en;q=0.9',
+            'x-nba-stats-origin':'stats','x-nba-stats-token':'true'
+          }
+          try:
+            r=requests.get(url,params=params,headers=headers,timeout=45)
+            out={'status':r.status_code,'length':len(r.content),'head':r.text[:500]}
+            if r.ok:
+              j=r.json(); out['resultSets']=[{'name':x.get('name'),'rows':len(x.get('rowSet',[]))} for x in j.get('resultSets',[])]
+          except Exception as e:
+            out={'error':repr(e)}
+          open('nba_test_result.json','w').write(json.dumps(out,indent=2))
+          print(out)
+          PY
+      - name: Commit result
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add nba_test_result.json
+          git commit -m 'Add NBA connectivity test result' || exit 0
+          git push
