@@ -7,59 +7,91 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install requests pandas openpyxl
-      - name: Aggregate 2024-25 and 2025-26 GP and GS from NBA stats
+      - run: pip install requests pandas lxml openpyxl
+      - name: Aggregate 2024-25 and 2025-26 GP and GS
         run: |
           python - <<'PY'
-          import re,time,unicodedata,requests,pandas as pd
+          import io,re,time,unicodedata,requests,pandas as pd
+          from urllib.parse import quote
+
           PLAYERS=['Nikola Jokić','Victor Wembanyama','Moussa Diabaté','Zach Edey','Ivica Zubac','Joel Embiid','Steven Adams','Neemias Queta','Jarrett Allen','Bam Adebayo','Al Horford','Rudy Gobert','Donovan Clingan','Karl-Anthony Towns','Goga Bitadze','Isaiah Hartenstein','Jalen Duren','Wendell Carter Jr.','Jaxson Hayes','Jakob Poeltl','Onyeka Okongwu','Kristaps Porziņģis','Luke Kornet','Alperen Şengün','Clint Capela','Brook Lopez',"Kel'el Ware",'Thomas Bryant','Isaiah Stewart']
-          def norm(x):
-            x=''.join(c for c in unicodedata.normalize('NFKD',str(x)) if not unicodedata.combining(c)).lower()
-            return re.sub(r'[^a-z0-9]+','',x)
-          target={norm(x):x for x in PLAYERS}
-          s=requests.Session(); s.headers.update({
-            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-            'Accept':'application/json, text/plain, */*','Accept-Language':'en-US,en;q=0.9',
-            'Origin':'https://www.nba.com','Referer':'https://www.nba.com/'})
-          endpoint='https://stats.nba.com/stats/leaguedashplayerstats'
-          def fetch(season,starterbench=''):
-            params={'College':'','Conference':'','Country':'','DateFrom':'','DateTo':'','Division':'','DraftPick':'','DraftYear':'','GameScope':'','GameSegment':'','Height':'','LastNGames':'0','LeagueID':'00','Location':'','MeasureType':'Base','Month':'0','OpponentTeamID':'0','Outcome':'','PORound':'0','PaceAdjust':'N','PerMode':'Totals','Period':'0','PlayerExperience':'','PlayerPosition':'','PlusMinus':'N','Rank':'N','Season':season,'SeasonSegment':'','SeasonType':'Regular Season','ShotClockRange':'','StarterBench':starterbench,'TeamID':'0','VsConference':'','VsDivision':'','Weight':''}
-            for attempt in range(8):
-              r=s.get(endpoint,params=params,timeout=120)
-              print('GET',season,starterbench or 'All',attempt+1,r.status_code,len(r.content),flush=True)
-              if r.status_code==200 and r.text.startswith('{'):
-                js=r.json(); rs=js['resultSets'][0]; return pd.DataFrame(rs['rowSet'],columns=rs['headers'])
-              time.sleep(8*(attempt+1))
-            raise RuntimeError(f'NBA stats failed {season} {starterbench}')
-          raw=[]
-          for season in ('2024-25','2025-26'):
-            all_df=fetch(season,'')
-            st_df=fetch(season,'Starters')
-            starts={norm(r['PLAYER_NAME']):int(r['GP']) for _,r in st_df.iterrows()}
-            for _,r in all_df.iterrows():
-              k=norm(r['PLAYER_NAME'])
-              if k in target:
-                raw.append({'player':target[k],'season':season,'gp':int(r['GP']),'gs':starts.get(k,0)})
-          raw=pd.DataFrame(raw)
+          TITLES={p:p for p in PLAYERS}
+          TITLES.update({'Moussa Diabaté':'Moussa Diabaté (basketball)','Al Horford':'Al Horford','Karl-Anthony Towns':'Karl-Anthony Towns',"Kel'el Ware":"Kel'el Ware"})
+
+          def clean_col(c):
+            if isinstance(c,tuple): c=' '.join(str(x) for x in c if not str(x).startswith('Unnamed'))
+            c=unicodedata.normalize('NFKD',str(c))
+            c=''.join(x for x in c if not unicodedata.combining(x))
+            return re.sub(r'[^a-z0-9]+','',c.lower())
+          def clean_season(x):
+            s=str(x).replace('–','-').replace('—','-')
+            m=re.search(r'(2024-25|2025-26)',s)
+            return m.group(1) if m else ''
+          def as_int(x):
+            m=re.search(r'\d+',str(x).replace(',',''))
+            return int(m.group()) if m else 0
+
+          session=requests.Session(); session.headers.update({'User-Agent':'Mozilla/5.0 (compatible; NBA-data-validation/1.0)','Accept-Language':'en-US,en;q=0.9'})
+          raw=[]; failures=[]
+          for player in PLAYERS:
+            title=TITLES[player]
+            url='https://en.wikipedia.org/wiki/'+quote(title.replace(' ','_'),safe="_()'")
+            try:
+              r=session.get(url,timeout=60); r.raise_for_status()
+              tables=pd.read_html(io.StringIO(r.text))
+              found={}
+              for ti,df in enumerate(tables):
+                cols={clean_col(c):c for c in df.columns}
+                season_col=next((cols[k] for k in cols if k in ('season','nbaaregulaseasonseason') or k.endswith('season')),None)
+                gp_col=next((cols[k] for k in cols if k in ('gp','games','gamesplayed')),None)
+                gs_col=next((cols[k] for k in cols if k in ('gs','gamesstarted','starts')),None)
+                if season_col is None or gp_col is None or gs_col is None: continue
+                for _,row in df.iterrows():
+                  season=clean_season(row[season_col])
+                  if season not in ('2024-25','2025-26'): continue
+                  gp=as_int(row[gp_col]); gs=as_int(row[gs_col])
+                  if gp<=0: continue
+                  # Prefer the single season-total row; otherwise keep the largest GP row.
+                  prev=found.get(season)
+                  if prev is None or gp>prev['gp']:
+                    found[season]={'player':player,'season':season,'gp':gp,'gs':gs,'table_index':ti,'source':url}
+              if not found:
+                raise RuntimeError('No regular-season GP/GS rows found')
+              raw.extend(found.values())
+              print(player,found,flush=True)
+            except Exception as e:
+              failures.append({'player':player,'error':repr(e),'source':url})
+              print('FAILED',player,repr(e),flush=True)
+            time.sleep(.5)
+
+          rawdf=pd.DataFrame(raw)
           final=[]
           for p in PLAYERS:
-            d=raw[raw.player==p]
-            gp=int(d.gp.sum()) if not d.empty else 0; gs=int(d.gs.sum()) if not d.empty else 0
+            d=rawdf[rawdf.player==p] if not rawdf.empty else pd.DataFrame()
+            gp=int(d.gp.sum()) if not d.empty else 0
+            gs=int(d.gs.sum()) if not d.empty else 0
             pct=gs/gp if gp else None
-            final.append({'player':p,'gp_2024_25_to_2025_26':gp,'gs_2024_25_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':'Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')})
-          out=pd.DataFrame(final); missing=out[out.gp_2024_25_to_2025_26==0]
-          raw.to_csv('centre_gp_gs_raw_2seasons.csv',index=False)
+            role='Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')
+            final.append({'player':p,'gp_2024_25_to_2025_26':gp,'gs_2024_25_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':role})
+          out=pd.DataFrame(final)
+          missing=out[out.gp_2024_25_to_2025_26==0]
+          rawdf.to_csv('centre_gp_gs_raw_2seasons.csv',index=False)
           out.to_csv('centre_gp_gs_summary_2seasons.csv',index=False)
+          pd.DataFrame(failures).to_csv('centre_gp_gs_failures_2seasons.csv',index=False)
           missing.to_csv('centre_gp_gs_missing_2seasons.csv',index=False)
           with pd.ExcelWriter('centre_gp_gs_summary_2seasons.xlsx',engine='openpyxl') as w:
-            out.to_excel(w,index=False,sheet_name='Summary'); raw.to_excel(w,index=False,sheet_name='Raw'); missing.to_excel(w,index=False,sheet_name='Missing')
+            out.to_excel(w,index=False,sheet_name='Summary')
+            rawdf.to_excel(w,index=False,sheet_name='Raw')
+            pd.DataFrame(failures).to_excel(w,index=False,sheet_name='Failures')
+            missing.to_excel(w,index=False,sheet_name='Missing')
           print(out.to_string(index=False),flush=True)
+          print('captured',len(out)-len(missing),'missing',len(missing),flush=True)
           if len(missing): raise RuntimeError('missing players: '+','.join(missing.player))
           PY
       - uses: actions/upload-artifact@v4
@@ -69,6 +101,7 @@ jobs:
           path: |
             centre_gp_gs_summary_2seasons.csv
             centre_gp_gs_raw_2seasons.csv
+            centre_gp_gs_failures_2seasons.csv
             centre_gp_gs_missing_2seasons.csv
             centre_gp_gs_summary_2seasons.xlsx
           if-no-files-found: error
