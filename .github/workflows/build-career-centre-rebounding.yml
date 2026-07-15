@@ -1,0 +1,165 @@
+name: Build career centre rebounding leaderboard
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4 lxml pandas openpyxl
+      - name: Build and validate leaderboard
+        run: |
+          cat > /tmp/build.py <<'PY'
+          import io,re,time,random,unicodedata,requests,pandas as pd
+          from bs4 import BeautifulSoup,Comment
+          from urllib.parse import urljoin
+          BASE='https://www.basketball-reference.com'
+          H={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9','Referer':BASE+'/'}
+          s=requests.Session(); s.headers.update(H)
+          def norm(x): return unicodedata.normalize('NFKC',str(x)).replace('−','-').strip()
+          def get(url, tries=10):
+            err=None
+            for i in range(tries):
+              try:
+                r=s.get(url,timeout=120)
+                print('GET',r.status_code,len(r.content),url,flush=True)
+                if r.status_code==200 and len(r.content)>4000:
+                  time.sleep(random.uniform(3.2,5.8)); return r.text
+                err=RuntimeError(f'{r.status_code} {len(r.content)}')
+              except Exception as e: err=e
+              time.sleep(min(75,8*(i+1))+random.uniform(1,4))
+            raise RuntimeError(f'failed {url}: {err}')
+          def soup_all(html):
+            soup=BeautifulSoup(html,'lxml')
+            for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
+              if '<table' in c:
+                frag=BeautifulSoup(c,'lxml')
+                for t in frag.find_all('table'): soup.append(t)
+            return soup
+          # 2025-26 active centres from per-game table; keep one row per player id.
+          html=get(BASE+'/leagues/NBA_2026_per_game.html'); sp=soup_all(html)
+          table=sp.find('table',id='per_game_stats') or sp.find('table',id='per_game')
+          if table is None: raise RuntimeError('2026 per-game table not found')
+          active={}
+          for tr in table.select('tbody tr'):
+            if 'thead' in tr.get('class',[]): continue
+            a=tr.select_one('th[data-stat="name_display"] a, th[data-stat="player"] a, td[data-stat="name_display"] a, td[data-stat="player"] a')
+            pos=tr.select_one('[data-stat="pos"]')
+            if not a or not pos: continue
+            p=norm(pos.get_text())
+            if 'C' not in p: continue
+            m=re.search(r'/players/[a-z]/([^/.]+)\.html',a.get('href',''))
+            if m: active[m.group(1)]={'player_id':m.group(1),'player':norm(a.get_text()),'position_2026':p,'profile':urljoin(BASE,a['href'])}
+          print('active centres',len(active),flush=True)
+          candidates=[]; stints={}
+          for idx,(pid,p) in enumerate(active.items(),1):
+            print('PROFILE',idx,len(active),p['player'],flush=True)
+            ph=get(p['profile']); ps=soup_all(ph)
+            # Career rebounds from standard totals footer when available; otherwise sum non-TOT season rows.
+            t=ps.find('table',id='totals_stats') or ps.find('table',id='totals')
+            if t is None: continue
+            career_trb=None
+            foot=t.select_one('tfoot tr')
+            if foot:
+              c=foot.select_one('[data-stat="trb"]')
+              if c and norm(c.get_text()).replace(',','').isdigit(): career_trb=int(norm(c.get_text()).replace(',',''))
+            rows=[]; sum_trb=0
+            for tr in t.select('tbody tr'):
+              if 'thead' in tr.get('class',[]): continue
+              season=tr.select_one('[data-stat="year_id"], [data-stat="season"]'); team=tr.select_one('[data-stat="team_name_abbr"], [data-stat="team_id"]'); rb=tr.select_one('[data-stat="trb"]')
+              if not season or not team: continue
+              st=norm(season.get_text()); tm=norm(team.get_text())
+              if not re.match(r'^\d{4}-\d{2}$',st) or tm in ('TOT',''): continue
+              year=int(st[:4])+1
+              if year>2026: continue
+              href=(team.find('a') or {}).get('href','') if team.find('a') else ''
+              mt=re.search(r'/teams/([A-Z0-9]+)/\d{4}\.html',href)
+              abbr=mt.group(1) if mt else tm
+              rows.append((year,abbr,st))
+              if rb:
+                x=norm(rb.get_text()).replace(',',''); sum_trb += int(x) if x.isdigit() else 0
+            if career_trb is None: career_trb=sum_trb
+            if career_trb>=5000:
+              p['career_rebounds']=career_trb; candidates.append(p); stints[pid]=sorted(set(rows))
+          print('QUALIFIERS',[(x['player'],x['career_rebounds']) for x in candidates],flush=True)
+          cache={}; records=[]; failures=[]
+          def num(cell):
+            if cell is None:return None
+            x=norm(cell.get_text()).replace('%','').replace('+','').replace(',','')
+            try:return float(x)
+            except:return None
+          for p in candidates:
+            pid=p['player_id']
+            for year,tm,season in stints[pid]:
+              key=(tm,year)
+              try:
+                if key not in cache: cache[key]=soup_all(get(f'{BASE}/teams/{tm}/{year}/on-off/'))
+                so=cache[key]; tbl=so.find('table',id='on_off')
+                if tbl is None: raise RuntimeError('on_off missing')
+                anchor=tbl.find('a',href=re.compile(fr'/players/[a-z]/{re.escape(pid)}\.html'))
+                if not anchor: raise RuntimeError('player row missing')
+                tr=anchor.find_parent('tr'); group=[tr]
+                nxt=tr.find_next_sibling('tr')
+                while nxt is not None and len(group)<3:
+                  group.append(nxt); nxt=nxt.find_next_sibling('tr')
+                vals={}
+                for rr in group:
+                  split=rr.select_one('[data-stat="on_off"]') or rr.find_all(['th','td'])[1]
+                  label=norm(split.get_text()) if split else ''
+                  if label in ('On Court','Off Court'):
+                    mp=num(rr.select_one('[data-stat="mp"]'))
+                    pace=num(rr.select_one('[data-stat="pace"]'))
+                    trbp=num(rr.select_one('[data-stat="trb_pct"]'))
+                    # fallback to positional cells from known table layout
+                    cells=rr.find_all(['th','td'])
+                    if mp is None and len(cells)>2: mp=num(cells[2])
+                    if trbp is None and len(cells)>6: trbp=num(cells[6])
+                    if pace is None and len(cells)>11: pace=num(cells[11])
+                    vals[label]=(mp,pace,trbp)
+                if set(vals)!= {'On Court','Off Court'}: raise RuntimeError(f'incomplete splits {vals}')
+                onmp,onpace,ontrb=vals['On Court']; offmp,offpace,offtrb=vals['Off Court']
+                if None in (onmp,onpace,ontrb,offmp,offpace,offtrb): raise RuntimeError(f'null data {vals}')
+                records.append({'player_id':pid,'player':p['player'],'season':season,'team':tm,'on_mp':onmp,'on_pace':onpace,'on_trb_pct':ontrb,'off_mp':offmp,'off_pace':offpace,'off_trb_pct':offtrb})
+              except Exception as e:
+                failures.append({'player_id':pid,'player':p['player'],'season':season,'team':tm,'error':str(e)})
+          raw=pd.DataFrame(records); fail=pd.DataFrame(failures)
+          raw.to_csv('career_centre_rebounding_stints.csv',index=False)
+          fail.to_csv('career_centre_rebounding_failures.csv',index=False)
+          # Weight by estimated possessions (minutes * pace / 48), the closest defensible exposure proxy available in B-Ref on/off tables.
+          out=[]
+          for p in candidates:
+            d=raw[raw.player_id==p['player_id']].copy()
+            expected=len(stints[p['player_id']]); captured=len(d)
+            if captured!=expected: continue
+            d['on_weight']=d.on_mp*d.on_pace/48; d['off_weight']=d.off_mp*d.off_pace/48
+            on=(d.on_trb_pct*d.on_weight).sum()/d.on_weight.sum(); off=(d.off_trb_pct*d.off_weight).sum()/d.off_weight.sum()
+            out.append({'player':p['player'],'player_id':p['player_id'],'position_2025_26':p['position_2026'],'career_rebounds_through_2025_26':p['career_rebounds'],'team_season_stints':expected,'career_on_court_team_trb_pct':on,'career_off_court_team_trb_pct':off,'career_trb_pct_on_off_swing':on-off,'on_court_minutes':d.on_mp.sum(),'off_court_minutes':d.off_mp.sum(),'validation_status':'Complete'})
+          lead=pd.DataFrame(out).sort_values('career_trb_pct_on_off_swing',ascending=False).reset_index(drop=True)
+          lead.insert(0,'rank',range(1,len(lead)+1))
+          for c in ['career_on_court_team_trb_pct','career_off_court_team_trb_pct','career_trb_pct_on_off_swing']: lead[c]=lead[c].round(3)
+          lead.to_csv('career_centre_rebounding_leaderboard.csv',index=False)
+          with pd.ExcelWriter('career_centre_rebounding_results.xlsx',engine='openpyxl') as w:
+            lead.to_excel(w,index=False,sheet_name='Leaderboard'); raw.to_excel(w,index=False,sheet_name='Stints'); fail.to_excel(w,index=False,sheet_name='Failures')
+            pd.DataFrame({'methodology':['Eligibility: listed at centre in Basketball-Reference 2025-26 per-game table and at least 5,000 career regular-season rebounds through 2025-26.','Metric: career on-court team TRB% minus career off-court team TRB%, combining every team-season stint.','Aggregation: weighted by estimated possessions = minutes × pace / 48 because underlying rebound opportunities are not published in the Basketball-Reference on/off table. This is a possession-exposure approximation, not exact rebound-opportunity weighting.','Validation: output includes only players with every identified team-season stint captured; failures are listed separately.']}).to_excel(w,index=False,sheet_name='Methodology')
+          print(lead.to_string(index=False),flush=True)
+          print('failures',len(fail),'leaderboard',len(lead),'qualifiers',len(candidates),flush=True)
+          if len(fail)>0 or len(lead)!=len(candidates): raise RuntimeError(f'validation incomplete: qualifiers={len(candidates)} leaderboard={len(lead)} failures={len(fail)}')
+          PY
+          python /tmp/build.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: career-centre-rebounding-results
+          path: |
+            career_centre_rebounding_leaderboard.csv
+            career_centre_rebounding_stints.csv
+            career_centre_rebounding_failures.csv
+            career_centre_rebounding_results.xlsx
+          if-no-files-found: warn
