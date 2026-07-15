@@ -1,0 +1,185 @@
+name: Build career centre rebounding on-off leaderboard
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4 lxml pandas numpy
+      - name: Build career rebound leaderboard
+        run: |
+          python - <<'PY'
+          import io, re, time, random, unicodedata, json
+          from pathlib import Path
+          import requests, pandas as pd, numpy as np
+          from bs4 import BeautifulSoup, Comment
+
+          TEAMS=['ATL','BOS','BRK','CHO','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHO','POR','SAC','SAS','TOR','UTA','WAS']
+          H={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36','Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.basketball-reference.com/'}
+          S=requests.Session(); S.headers.update(H)
+          cache=Path('career_reb_cache'); cache.mkdir(exist_ok=True)
+
+          def norm(s):
+            if s is None: return ''
+            s=str(s)
+            try:
+              if any(x in s for x in ('Ã','Ä','Å','â')): s=s.encode('latin1').decode('utf8')
+            except: pass
+            return unicodedata.normalize('NFKC',s).strip()
+
+          def get(url,key):
+            p=cache/(re.sub(r'[^A-Za-z0-9_.-]','_',key)+'.html')
+            if p.exists() and p.stat().st_size>5000: return p.read_text(encoding='utf-8',errors='replace')
+            err=None
+            for i in range(8):
+              try:
+                r=S.get(url,timeout=90)
+                print(key,'attempt',i+1,r.status_code,len(r.content),flush=True)
+                if r.status_code==200 and len(r.content)>5000:
+                  p.write_bytes(r.content); time.sleep(1.4+random.random()); return r.text
+                err=RuntimeError(f'{r.status_code} {len(r.content)}')
+              except Exception as e: err=e
+              time.sleep(min(45,4*(i+1))+random.random()*2)
+            raise err
+
+          def table(html,tid):
+            soup=BeautifulSoup(html,'lxml'); t=soup.find('table',id=tid)
+            if t is None:
+              for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
+                if tid in c and '<table' in c:
+                  t=BeautifulSoup(c,'lxml').find('table',id=tid)
+                  if t is not None: break
+            return t
+
+          # Active 2025-26 centres and player URLs
+          active={}
+          roster_fail=[]
+          for tm in TEAMS:
+            try:
+              h=get(f'https://www.basketball-reference.com/teams/{tm}/2026.html',f'roster_{tm}_2026')
+              t=table(h,'roster')
+              if t is None: raise RuntimeError('roster table missing')
+              for tr in t.select('tbody tr'):
+                pos=tr.find(attrs={'data-stat':'pos'})
+                pl=tr.find(attrs={'data-stat':'player'})
+                if not pos or not pl or 'C' not in pos.get_text(' ',strip=True).upper(): continue
+                a=pl.find('a',href=True)
+                if not a: continue
+                name=norm(pl.get_text(' ',strip=True)); href=a['href']
+                active[href]={'PLAYER':name,'CURRENT_TEAM':tm,'POSITION':pos.get_text(' ',strip=True)}
+            except Exception as e: roster_fail.append({'TEAM':tm,'ERROR':repr(e)})
+
+          print('active centres',len(active),flush=True)
+          eligibility=[]; stints_by_player={}; profile_fail=[]
+          for href,meta in active.items():
+            try:
+              h=get('https://www.basketball-reference.com'+href,'player_'+href.split('/')[-1])
+              t=table(h,'totals')
+              if t is None: raise RuntimeError('totals table missing')
+              career=t.select_one('tfoot tr')
+              if career is None:
+                rows=t.select('tbody tr'); career=None
+              trb=None
+              if career:
+                cell=career.find(attrs={'data-stat':'trb'})
+                if cell and cell.get_text(strip=True): trb=int(float(cell.get_text(strip=True).replace(',','')))
+              if trb is None:
+                # Sum unique season TOT rows where present, otherwise team rows
+                season_rows={}
+                for tr in t.select('tbody tr'):
+                  yr=tr.find(attrs={'data-stat':'year_id'}); team=tr.find(attrs={'data-stat':'team_name_abbr'}); rb=tr.find(attrs={'data-stat':'trb'})
+                  if not yr or not team or not rb: continue
+                  y=yr.get_text(strip=True); tt=team.get_text(strip=True); v=rb.get_text(strip=True)
+                  if not y or not v: continue
+                  season_rows.setdefault(y,[]).append((tt,int(float(v.replace(',','')))))
+                trb=sum(next((v for tt,v in vals if tt=='TOT'),sum(v for tt,v in vals)) for vals in season_rows.values())
+              stints=[]
+              for tr in t.select('tbody tr'):
+                yr=tr.find(attrs={'data-stat':'year_id'}); team=tr.find(attrs={'data-stat':'team_name_abbr'})
+                if not yr or not team: continue
+                ytxt=yr.get_text(strip=True); tm=team.get_text(strip=True)
+                if not ytxt or tm in ('TOT',''): continue
+                m=re.search(r'(\d{4})-(\d{2})',ytxt)
+                if not m: continue
+                end=int(m.group(1)[:2]+m.group(2))
+                stints.append((end,tm))
+              stints=sorted(set(stints))
+              eligibility.append({**meta,'HREF':href,'CAREER_REB':trb,'STINTS':len(stints)})
+              stints_by_player[href]=stints
+            except Exception as e: profile_fail.append({'PLAYER':meta['PLAYER'],'HREF':href,'ERROR':repr(e)})
+
+          elig=pd.DataFrame(eligibility)
+          qual=elig[elig.CAREER_REB>=5000].copy().sort_values('CAREER_REB',ascending=False)
+          print('eligible 5000+',len(qual),qual[['PLAYER','CAREER_REB']].to_dict('records'),flush=True)
+
+          rows=[]; page_fail=[]
+          page_cache={}
+          for _,q in qual.iterrows():
+            href=q.HREF; pname=norm(q.PLAYER)
+            for end,tm in stints_by_player[href]:
+              key=(end,tm)
+              try:
+                if key not in page_cache:
+                  h=get(f'https://www.basketball-reference.com/teams/{tm}/{end}/on-off/',f'onoff_{tm}_{end}')
+                  t=table(h,'on_off')
+                  if t is None: raise RuntimeError('on_off table missing')
+                  df=pd.read_html(io.StringIO(str(t)))[0]
+                  if isinstance(df.columns,pd.MultiIndex):
+                    df.columns=['|'.join(str(x) for x in c) for c in df.columns]
+                  page_cache[key]=df
+                df=page_cache[key]
+                pcol=[c for c in df.columns if c.endswith('|Player') or c=='Player'][0]
+                scol=[c for c in df.columns if c.endswith('|Split') or c=='Split'][0]
+                mpcol=[c for c in df.columns if c.endswith('|MP') or c=='MP'][0]
+                trbcol=[c for c in df.columns if c=='Team|TRB%' or (c.startswith('Team') and c.endswith('|TRB%'))][0]
+                current=None; found=False
+                for _,r in df.iterrows():
+                  if pd.notna(r[pcol]) and str(r[pcol]).strip() not in ('','Player'): current=norm(r[pcol])
+                  if current!=pname: continue
+                  split=str(r[scol]).strip()
+                  if split not in ('On Court','Off Court'): continue
+                  mp=float(str(r[mpcol]).replace(',','')); val=float(str(r[trbcol]).replace('%',''))
+                  rows.append({'PLAYER':pname,'HREF':href,'SEASON_END':end,'TEAM':tm,'SPLIT':split,'MP':mp,'TEAM_TRB_PCT':val}); found=True
+                if not found: page_fail.append({'PLAYER':pname,'SEASON_END':end,'TEAM':tm,'ERROR':'player not found'})
+              except Exception as e: page_fail.append({'PLAYER':pname,'SEASON_END':end,'TEAM':tm,'ERROR':repr(e)})
+
+          raw=pd.DataFrame(rows)
+          out=[]
+          for _,q in qual.iterrows():
+            d=raw[raw.HREF==q.HREF]
+            on=d[d.SPLIT=='On Court']; off=d[d.SPLIT=='Off Court']
+            onmp=on.MP.sum(); offmp=off.MP.sum()
+            onpct=np.average(on.TEAM_TRB_PCT,weights=on.MP) if onmp>0 else np.nan
+            offpct=np.average(off.TEAM_TRB_PCT,weights=off.MP) if offmp>0 else np.nan
+            out.append({'PLAYER':q.PLAYER,'CURRENT_TEAM':q.CURRENT_TEAM,'POSITION':q.POSITION,'CAREER_REB':int(q.CAREER_REB),'CAREER_ON_MIN':onmp,'CAREER_OFF_MIN':offmp,'ON_TEAM_TRB_PCT':onpct,'OFF_TEAM_TRB_PCT':offpct,'TRB_PCT_SWING':onpct-offpct,'EXPECTED_STINTS':int(q.STINTS),'CAPTURED_ON_STINTS':len(on),'CAPTURED_OFF_STINTS':len(off)})
+          lb=pd.DataFrame(out).sort_values('TRB_PCT_SWING',ascending=False).reset_index(drop=True)
+          lb.insert(0,'RANK',range(1,len(lb)+1))
+          lb.to_csv('career_centre_team_trb_onoff.csv',index=False)
+          raw.to_csv('raw_career_team_trb_stints.csv',index=False)
+          elig.to_csv('active_centre_eligibility.csv',index=False)
+          pd.DataFrame(roster_fail).to_csv('roster_failures.csv',index=False)
+          pd.DataFrame(profile_fail).to_csv('profile_failures.csv',index=False)
+          pd.DataFrame(page_fail).to_csv('onoff_page_failures.csv',index=False)
+          summary={'active_centres_found':len(active),'eligible_centres_5000_rebounds':len(qual),'leaderboard_rows':len(lb),'roster_failures':len(roster_fail),'profile_failures':len(profile_fail),'onoff_stint_failures':len(page_fail),'weighting':'Team TRB% aggregated separately for on/off using minutes as exposure weight.'}
+          open('career_rebound_summary.json','w').write(json.dumps(summary,indent=2))
+          print(lb.to_string(index=False),flush=True); print(summary,flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: career-centre-rebounding-results
+          path: |
+            career_centre_team_trb_onoff.csv
+            raw_career_team_trb_stints.csv
+            active_centre_eligibility.csv
+            roster_failures.csv
+            profile_failures.csv
+            onoff_page_failures.csv
+            career_rebound_summary.json
