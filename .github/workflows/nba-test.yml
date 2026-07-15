@@ -1,39 +1,29 @@
-name: Inspect Basketball Reference on-off
+name: Download Basketball Reference on-off HTML
 on:
   pull_request:
     branches: [main]
 permissions:
   contents: read
 jobs:
-  inspect:
+  download:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install requests beautifulsoup4 lxml pandas
-      - name: Inspect Houston tables
+      - run: pip install requests
+      - name: Download Houston page
         run: |
           python - <<'PY'
-          import requests, pandas as pd, json, re
-          from bs4 import BeautifulSoup, Comment
+          import requests
           u='https://www.basketball-reference.com/teams/HOU/2026/on-off/'
-          h={'User-Agent':'Mozilla/5.0'}
-          text=requests.get(u,headers=h,timeout=60).text
-          # BRef sometimes wraps tables in HTML comments.
-          expanded=text + '\n'.join(c for c in BeautifulSoup(text,'lxml').find_all(string=lambda x:isinstance(x,Comment)))
-          tables=pd.read_html(expanded)
-          out=[]
-          for i,t in enumerate(tables):
-            out.append({'index':i,'shape':list(t.shape),'columns':[str(x) for x in t.columns],'head':t.head(8).astype(str).to_dict('records')})
-          open('hou_tables.json','w').write(json.dumps(out,indent=2))
-          open('hou_onoff.html','w').write(text)
-          print(json.dumps(out,indent=2)[:12000])
+          r=requests.get(u,headers={'User-Agent':'Mozilla/5.0'},timeout=60)
+          r.raise_for_status()
+          open('hou_onoff.html','wb').write(r.content)
+          print(len(r.content))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: hou-table-inspection
-          path: |
-            hou_tables.json
-            hou_onoff.html
+          name: hou-onoff-html
+          path: hou_onoff.html
