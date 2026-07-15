@@ -1,4 +1,4 @@
-name: Build centre GP and GS percentages
+name: Build two-season centre GP and GS percentages
 on:
   pull_request:
     branches: [main]
@@ -7,25 +7,25 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install requests beautifulsoup4 lxml pandas openpyxl
-      - name: Aggregate 2021-22 through 2025-26 GP and GS
+      - name: Aggregate 2024-25 and 2025-26 GP and GS
         run: |
           python - <<'PY'
-          import io,time,random,unicodedata,re,requests,pandas as pd
+          import time,random,unicodedata,requests,pandas as pd
           from bs4 import BeautifulSoup,Comment
-          PLAYERS=['Nikola Jokić','Victor Wembanyama','Joel Embiid','Robert Williams','Jusuf Nurkić','Steven Adams','Isaiah Hartenstein','Jarrett Allen','Rudy Gobert','Jakob Poeltl','Myles Turner','Walker Kessler','Kevon Looney','Al Horford','Dwight Powell','Ivica Zubac','Brook Lopez','Bam Adebayo','Goga Bitadze','Jalen Duren','Luke Kornet','Onyeka Okongwu','Jock Landale','Alperen Şengün','Clint Capela','Mitchell Robinson','Kelly Olynyk','Andre Drummond','Jaxson Hayes','Moritz Wagner','Jonas Valančiūnas','Deandre Ayton','Nic Claxton','Mason Plumlee','Nikola Vučević','Drew Eubanks','Nick Richards']
+          PLAYERS=['Nikola Jokić', 'Victor Wembanyama', 'Moussa Diabaté', 'Zach Edey', 'Jaren Jackson Jr.', 'Day’Ron Sharpe', 'Ivica Zubac', 'Domantas Sabonis', 'Jalen Smith', 'Joel Embiid', 'Steven Adams', 'Neemias Queta', 'Jarrett Allen', 'Bam Adebayo', 'Al Horford', 'Rudy Gobert', 'Donovan Clingan', 'Karl-Anthony Towns', 'Goga Bitadze', 'Myles Turner', 'Naz Reid', 'Isaiah Hartenstein', 'Jalen Duren', 'Wendell Carter Jr.', 'Jaxson Hayes', 'Micah Potter', 'Jakob Poeltl', 'Onyeka Okongwu', 'Walker Kessler', 'Kristaps Porziņģis', 'Luke Kornet', 'Daniel Gafford', 'Adem Bona', 'Alperen Şengün', 'Clint Capela', 'Brook Lopez', 'Kyle Filipowski', 'Jusuf Nurkić', 'Alex Sarr', 'Yves Missi', 'Kel’el Ware', 'Thomas Bryant', 'Precious Achiuwa', 'Deandre Ayton', 'Jock Landale', 'Maxime Raynaud', 'Nikola Vučević', 'Mark Williams', 'Guerschon Yabusele', 'Jay Huff', 'Andre Drummond', 'Derik Queen', 'Nick Richards', 'Isaiah Stewart', 'Jonas Valančiūnas', 'Jericho Sims', 'Nic Claxton', 'Ousmane Dieng']
           def norm(x):
             return ''.join(c for c in unicodedata.normalize('NFKD',str(x)) if not unicodedata.combining(c)).replace('−','-').replace('*','').strip().lower()
           target={norm(x):x for x in PLAYERS}
           s=requests.Session(); s.headers.update({'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.basketball-reference.com/'})
           rows=[]
-          for year in range(2022,2027):
+          for year in (2025,2026):
             url=f'https://www.basketball-reference.com/leagues/NBA_{year}_per_game.html'
             for attempt in range(8):
               r=s.get(url,timeout=90)
@@ -49,7 +49,6 @@ jobs:
               if key not in target: continue
               team=tr.select_one('[data-stat="team_name_abbr"],[data-stat="team_id"]')
               tm=team.get_text(strip=True) if team else ''
-              # Prefer TOT row when present; otherwise individual team rows are summed below.
               gp=tr.select_one('[data-stat="games"]'); gs=tr.select_one('[data-stat="games_started"]')
               def val(c):
                 try:return int(float(c.get_text().replace(',','').strip())) if c else 0
@@ -67,20 +66,20 @@ jobs:
             u=pd.DataFrame(use)
             gp=int(u.gp.sum()) if not u.empty else 0; gs=int(u.gs.sum()) if not u.empty else 0
             pct=gs/gp if gp else None
-            final.append({'player':player,'gp_2021_22_to_2025_26':gp,'gs_2021_22_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':'Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')})
+            final.append({'player':player,'gp_2024_25_to_2025_26':gp,'gs_2024_25_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':'Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')})
           out=pd.DataFrame(final)
-          missing=out[out.gp_2021_22_to_2025_26==0]
+          missing=out[out.gp_2024_25_to_2025_26==0]
           print(out.to_string(index=False),flush=True)
           if len(missing): raise RuntimeError('missing players: '+','.join(missing.player))
-          raw.to_csv('centre_gp_gs_raw.csv',index=False)
-          out.to_csv('centre_gp_gs_summary.csv',index=False)
-          with pd.ExcelWriter('centre_gp_gs_summary.xlsx',engine='openpyxl') as w:
+          raw.to_csv('centre_gp_gs_raw_2seasons.csv',index=False)
+          out.to_csv('centre_gp_gs_summary_2seasons.csv',index=False)
+          with pd.ExcelWriter('centre_gp_gs_summary_2seasons.xlsx',engine='openpyxl') as w:
             out.to_excel(w,index=False,sheet_name='Summary'); raw.to_excel(w,index=False,sheet_name='Raw')
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: centre-gp-gs-results
+          name: centre-gp-gs-two-season-results
           path: |
-            centre_gp_gs_summary.csv
-            centre_gp_gs_raw.csv
-            centre_gp_gs_summary.xlsx
+            centre_gp_gs_summary_2seasons.csv
+            centre_gp_gs_raw_2seasons.csv
+            centre_gp_gs_summary_2seasons.xlsx
