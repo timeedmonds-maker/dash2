@@ -16,14 +16,22 @@ jobs:
       - name: Download Houston page
         run: |
           python - <<'PY'
-          import requests
+          import requests, json
           u='https://www.basketball-reference.com/teams/HOU/2026/on-off/'
-          r=requests.get(u,headers={'User-Agent':'Mozilla/5.0'},timeout=60)
-          r.raise_for_status()
+          headers={
+            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language':'en-US,en;q=0.9',
+            'Referer':'https://www.basketball-reference.com/'
+          }
+          r=requests.get(u,headers=headers,timeout=60)
           open('hou_onoff.html','wb').write(r.content)
-          print(len(r.content))
+          open('download_meta.json','w').write(json.dumps({'status':r.status_code,'length':len(r.content),'url':r.url},indent=2))
+          print(r.status_code, len(r.content))
           PY
       - uses: actions/upload-artifact@v4
         with:
           name: hou-onoff-html
-          path: hou_onoff.html
+          path: |
+            hou_onoff.html
+            download_meta.json
