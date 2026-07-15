@@ -1,0 +1,32 @@
+{
+  "https://www.basketball-reference.com/teams/HOU/2026/on-off/": {
+    "status": 200,
+    "length": 346742,
+    "final_url": "https://www.basketball-reference.com/teams/HOU/2026/on-off/",
+    "head": "\n<!DOCTYPE html>\n<html data-version=\"klecko-\" data-root=\"/home/bbr/deploy/www\" lang=\"en\" class=\"no-js\" >\n<head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"x-ua-compatible\" content=\"ie=edge\">\n    <meta name=\"viewport\" content=\"width=device-width"
+  },
+  "https://www.basketball-reference.com/teams/HOU/2026.html": {
+    "status": 200,
+    "length": 851944,
+    "final_url": "https://www.basketball-reference.com/teams/HOU/2026.html",
+    "head": "\n<!DOCTYPE html>\n<html data-version=\"klecko-\" data-root=\"/home/bbr/build\" lang=\"en\" class=\"no-js\" >\n<head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"x-ua-compatible\" content=\"ie=edge\">\n    <meta name=\"viewport\" content=\"width=device-width, ini"
+  },
+  "https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json": {
+    "status": 403,
+    "length": 445,
+    "final_url": "https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json",
+    "head": "<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don't have permission to access \"http&#58;&#47;&#47;cdn&#46;nba&#46;com&#47;static&#47;json&#47;liveData&#47;scoreboard&#47;todaysScoreboard&#95;00&#46;json\" on this"
+  },
+  "https://www.nba.com/stats/team/1610612745/onoffcourt-advanced?Season=2025-26&SeasonType=Regular%20Season": {
+    "status": 200,
+    "length": 576515,
+    "final_url": "https://www.nba.com/stats/team/1610612745/onoffcourt-advanced?Season=2025-26&SeasonType=Regular%20Season",
+    "head": "<!DOCTYPE html><html lang=\"en\" data-version=\"4.126.3\" data-client=\"NBA\" data-theme=\"light\"><head><meta charSet=\"utf-8\"/><script id=\"user-consent\" defer=\"\" src=\"https://cdn.nba.com/user-consent/index-gam.min.js\"></script><link rel=\"manifest\" href=\"/si"
+  },
+  "https://api.pbpstats.com/": {
+    "status": 404,
+    "length": 22,
+    "final_url": "https://api.pbpstats.com/",
+    "head": "{\"detail\":\"Not Found\"}"
+  }
+}
