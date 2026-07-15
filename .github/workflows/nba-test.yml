@@ -2,6 +2,8 @@ name: NBA endpoint test
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -41,10 +43,3 @@ jobs:
           open('nba_test_result.json','w').write(json.dumps(out,indent=2))
           print(out)
           PY
-      - name: Commit result
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add nba_test_result.json
-          git commit -m 'Add NBA connectivity test result' || exit 0
-          git push
