@@ -17,69 +17,68 @@ jobs:
       - name: Aggregate 2024-25 and 2025-26 GP and GS
         run: |
           python - <<'PY'
-          import time,random,unicodedata,requests,pandas as pd
+          import re,time,random,unicodedata,requests,pandas as pd
           from bs4 import BeautifulSoup,Comment
-          PLAYERS=['Nikola Jokić', 'Victor Wembanyama', 'Moussa Diabaté', 'Zach Edey', 'Jaren Jackson Jr.', 'Day’Ron Sharpe', 'Ivica Zubac', 'Domantas Sabonis', 'Jalen Smith', 'Joel Embiid', 'Steven Adams', 'Neemias Queta', 'Jarrett Allen', 'Bam Adebayo', 'Al Horford', 'Rudy Gobert', 'Donovan Clingan', 'Karl-Anthony Towns', 'Goga Bitadze', 'Myles Turner', 'Naz Reid', 'Isaiah Hartenstein', 'Jalen Duren', 'Wendell Carter Jr.', 'Jaxson Hayes', 'Micah Potter', 'Jakob Poeltl', 'Onyeka Okongwu', 'Walker Kessler', 'Kristaps Porziņģis', 'Luke Kornet', 'Daniel Gafford', 'Adem Bona', 'Alperen Şengün', 'Clint Capela', 'Brook Lopez', 'Kyle Filipowski', 'Jusuf Nurkić', 'Alex Sarr', 'Yves Missi', 'Kel’el Ware', 'Thomas Bryant', 'Precious Achiuwa', 'Deandre Ayton', 'Jock Landale', 'Maxime Raynaud', 'Nikola Vučević', 'Mark Williams', 'Guerschon Yabusele', 'Jay Huff', 'Andre Drummond', 'Derik Queen', 'Nick Richards', 'Isaiah Stewart', 'Jonas Valančiūnas', 'Jericho Sims', 'Nic Claxton', 'Ousmane Dieng']
+          PLAYERS=['Nikola Jokić','Victor Wembanyama','Moussa Diabaté','Zach Edey','Jaren Jackson Jr.','Day’Ron Sharpe','Ivica Zubac','Domantas Sabonis','Jalen Smith','Joel Embiid','Steven Adams','Neemias Queta','Jarrett Allen','Bam Adebayo','Al Horford','Rudy Gobert','Donovan Clingan','Karl-Anthony Towns','Goga Bitadze','Myles Turner','Naz Reid','Isaiah Hartenstein','Jalen Duren','Wendell Carter Jr.','Jaxson Hayes','Micah Potter','Jakob Poeltl','Onyeka Okongwu','Walker Kessler','Kristaps Porziņģis','Luke Kornet','Daniel Gafford','Adem Bona','Alperen Şengün','Clint Capela','Brook Lopez','Kyle Filipowski','Jusuf Nurkić','Alex Sarr','Yves Missi','Kel’el Ware','Thomas Bryant','Precious Achiuwa','Deandre Ayton','Jock Landale','Maxime Raynaud','Nikola Vučević','Mark Williams','Guerschon Yabusele','Jay Huff','Andre Drummond','Derik Queen','Nick Richards','Isaiah Stewart','Jonas Valančiūnas','Jericho Sims','Nic Claxton','Ousmane Dieng']
           def norm(x):
-            return ''.join(c for c in unicodedata.normalize('NFKD',str(x)) if not unicodedata.combining(c)).replace('−','-').replace('*','').strip().lower()
+            x=''.join(c for c in unicodedata.normalize('NFKD',str(x)) if not unicodedata.combining(c)).lower()
+            return re.sub(r'[^a-z0-9]+','',x)
           target={norm(x):x for x in PLAYERS}
-          s=requests.Session(); s.headers.update({'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.basketball-reference.com/'})
+          s=requests.Session(); s.headers.update({'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.basketball-reference.com/'})
           rows=[]
           for year in (2025,2026):
             url=f'https://www.basketball-reference.com/leagues/NBA_{year}_per_game.html'
             for attempt in range(8):
               r=s.get(url,timeout=90)
-              print(year,attempt+1,r.status_code,len(r.content),flush=True)
+              print('GET',year,attempt+1,r.status_code,len(r.content),flush=True)
               if r.status_code==200 and len(r.content)>10000: break
               time.sleep(6*(attempt+1)+random.uniform(1,3))
             else: raise RuntimeError(f'failed {url}')
             soup=BeautifulSoup(r.text,'lxml')
-            table=soup.find('table',id='per_game_stats') or soup.find('table',id='per_game')
-            if table is None:
-              for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
-                if 'per_game' in c and '<table' in c:
-                  frag=BeautifulSoup(c,'lxml'); table=frag.find('table',id='per_game_stats') or frag.find('table',id='per_game')
-                  if table is not None: break
+            tables=[soup.find('table',id='per_game_stats'),soup.find('table',id='per_game')]
+            for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
+              if '<table' in c and ('per_game' in c or 'per_game_stats' in c):
+                frag=BeautifulSoup(c,'lxml'); tables += [frag.find('table',id='per_game_stats'),frag.find('table',id='per_game')]
+            table=next((t for t in tables if t is not None),None)
             if table is None: raise RuntimeError(f'table missing {year}')
             for tr in table.select('tbody tr'):
-              if 'thead' in tr.get('class',[]): continue
               pc=tr.select_one('[data-stat="name_display"],[data-stat="player"]')
               if pc is None: continue
               key=norm(pc.get_text())
               if key not in target: continue
-              team=tr.select_one('[data-stat="team_name_abbr"],[data-stat="team_id"]')
-              tm=team.get_text(strip=True) if team else ''
-              gp=tr.select_one('[data-stat="games"]'); gs=tr.select_one('[data-stat="games_started"]')
-              def val(c):
-                try:return int(float(c.get_text().replace(',','').strip())) if c else 0
+              def txt(stat):
+                c=tr.select_one(f'[data-stat="{stat}"]'); return c.get_text(strip=True) if c else ''
+              def val(stat):
+                try:return int(float(txt(stat).replace(',','')))
                 except:return 0
-              rows.append({'player':target[key],'season_end':year,'team':tm,'gp':val(gp),'gs':val(gs)})
-            time.sleep(random.uniform(3,5))
+              rows.append({'player':target[key],'season_end':year,'team':txt('team_name_abbr') or txt('team_id'),'gp':val('games'),'gs':val('games_started')})
+            time.sleep(random.uniform(2,4))
           raw=pd.DataFrame(rows)
           final=[]
           for player in PLAYERS:
-            d=raw[raw.player==player].copy()
-            use=[]
+            d=raw[raw.player==player].copy(); use=[]
             for year,g in d.groupby('season_end'):
               if (g.team=='TOT').any(): use.append(g[g.team=='TOT'].iloc[0])
               else: use.extend([r for _,r in g.iterrows()])
-            u=pd.DataFrame(use)
-            gp=int(u.gp.sum()) if not u.empty else 0; gs=int(u.gs.sum()) if not u.empty else 0
+            u=pd.DataFrame(use); gp=int(u.gp.sum()) if not u.empty else 0; gs=int(u.gs.sum()) if not u.empty else 0
             pct=gs/gp if gp else None
             final.append({'player':player,'gp_2024_25_to_2025_26':gp,'gs_2024_25_to_2025_26':gs,'gs_pct':round(pct,4) if pct is not None else None,'role':'Majority Starter' if pct is not None and pct>0.5 else ('Majority Bench' if pct is not None and pct<0.5 else 'Even Split')})
-          out=pd.DataFrame(final)
-          missing=out[out.gp_2024_25_to_2025_26==0]
-          print(out.to_string(index=False),flush=True)
-          if len(missing): raise RuntimeError('missing players: '+','.join(missing.player))
+          out=pd.DataFrame(final); missing=out[out.gp_2024_25_to_2025_26==0]
           raw.to_csv('centre_gp_gs_raw_2seasons.csv',index=False)
           out.to_csv('centre_gp_gs_summary_2seasons.csv',index=False)
+          missing.to_csv('centre_gp_gs_missing_2seasons.csv',index=False)
           with pd.ExcelWriter('centre_gp_gs_summary_2seasons.xlsx',engine='openpyxl') as w:
-            out.to_excel(w,index=False,sheet_name='Summary'); raw.to_excel(w,index=False,sheet_name='Raw')
+            out.to_excel(w,index=False,sheet_name='Summary'); raw.to_excel(w,index=False,sheet_name='Raw'); missing.to_excel(w,index=False,sheet_name='Missing')
+          print(out.to_string(index=False),flush=True)
+          if len(missing): raise RuntimeError('missing players: '+','.join(missing.player))
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: centre-gp-gs-two-season-results
           path: |
             centre_gp_gs_summary_2seasons.csv
             centre_gp_gs_raw_2seasons.csv
+            centre_gp_gs_missing_2seasons.csv
             centre_gp_gs_summary_2seasons.xlsx
+          if-no-files-found: warn
