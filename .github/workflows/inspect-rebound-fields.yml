@@ -1,0 +1,39 @@
+name: Inspect Basketball Reference rebound fields
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4 lxml pandas
+      - name: Inspect on-off columns
+        run: |
+          python - <<'PY'
+          import io, json, requests, pandas as pd
+          from bs4 import BeautifulSoup, Comment
+          r=requests.get('https://www.basketball-reference.com/teams/HOU/2026/on-off/',headers={'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9'},timeout=75)
+          r.raise_for_status()
+          soup=BeautifulSoup(r.text,'lxml'); t=soup.find('table',id='on_off')
+          if t is None:
+            for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
+              if 'on_off' in c and '<table' in c:
+                t=BeautifulSoup(c,'lxml').find('table',id='on_off')
+                if t is not None: break
+          if t is None: raise RuntimeError('on_off table not found')
+          df=pd.read_html(io.StringIO(str(t)))[0]
+          cols=['|'.join(str(x) for x in tup) for tup in df.columns] if isinstance(df.columns,pd.MultiIndex) else [str(x) for x in df.columns]
+          print('\n'.join(cols)); open('rebound_columns.json','w').write(json.dumps(cols,indent=2)); df.to_csv('houston_onoff_full.csv',index=False)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rebound-field-inspection
+          path: |
+            rebound_columns.json
+            houston_onoff_full.csv
