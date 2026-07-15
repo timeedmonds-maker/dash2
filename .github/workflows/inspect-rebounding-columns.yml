@@ -1,0 +1,42 @@
+name: Inspect rebounding on-off columns
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4 lxml pandas
+      - name: Inspect Basketball Reference table
+        run: |
+          cat > inspect.py <<'PY'
+          import io,json
+          import pandas as pd, requests
+          from bs4 import BeautifulSoup,Comment
+          u='https://www.basketball-reference.com/teams/HOU/2026/on-off/'
+          h={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36','Accept-Language':'en-US,en;q=0.9'}
+          r=requests.get(u,headers=h,timeout=90); r.raise_for_status()
+          soup=BeautifulSoup(r.text,'lxml'); t=soup.find('table',id='on_off')
+          if t is None:
+            for c in soup.find_all(string=lambda x:isinstance(x,Comment)):
+              if 'on_off' in c and '<table' in c:
+                t=BeautifulSoup(c,'lxml').find('table',id='on_off')
+                if t is not None: break
+          if t is None: raise RuntimeError('on_off not found')
+          d=pd.read_html(io.StringIO(str(t)))[0]
+          out={'shape':list(d.shape),'columns':[list(x) if isinstance(x,tuple) else str(x) for x in d.columns],'head':d.head(12).astype(str).to_dict('records')}
+          open('rebounding_columns.json','w').write(json.dumps(out,indent=2))
+          print(json.dumps(out,indent=2))
+          PY
+          python inspect.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rebounding-column-inspection
+          path: rebounding_columns.json
