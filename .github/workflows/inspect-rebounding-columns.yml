@@ -16,7 +16,7 @@ jobs:
       - run: pip install requests beautifulsoup4 lxml pandas
       - name: Inspect Basketball Reference table
         run: |
-          cat > inspect.py <<'PY'
+          cat > probe_rebounding.py <<'PY'
           import io,json
           import pandas as pd, requests
           from bs4 import BeautifulSoup,Comment
@@ -35,7 +35,7 @@ jobs:
           open('rebounding_columns.json','w').write(json.dumps(out,indent=2))
           print(json.dumps(out,indent=2))
           PY
-          python inspect.py
+          python probe_rebounding.py
       - uses: actions/upload-artifact@v4
         with:
           name: rebounding-column-inspection
