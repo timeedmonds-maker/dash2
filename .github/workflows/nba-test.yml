@@ -5,7 +5,7 @@ on:
   pull_request:
     branches: [main]
 permissions:
-  contents: write
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -37,10 +37,7 @@ jobs:
           open('alternate_test_result.json','w').write(json.dumps(out,indent=2))
           print(json.dumps(out,indent=2))
           PY
-      - name: Commit result
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add alternate_test_result.json
-          git commit -m 'Add alternate source connectivity result' || exit 0
-          git push
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alternate-source-result
+          path: alternate_test_result.json
