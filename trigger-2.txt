@@ -1,0 +1,1 @@
+trigger synchronize 2026-07-15

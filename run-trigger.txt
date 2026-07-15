@@ -1,0 +1,1 @@
+Run NBA endpoint connectivity test.
