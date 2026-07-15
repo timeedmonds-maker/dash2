@@ -1,13 +1,11 @@
-name: NBA alternate source test
+name: Inspect Basketball Reference on-off
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 permissions:
   contents: read
 jobs:
-  test:
+  inspect:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,29 +13,27 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install requests beautifulsoup4 lxml pandas
-      - name: Test alternate sources
+      - name: Inspect Houston tables
         run: |
           python - <<'PY'
-          import requests, json
-          urls=[
-            'https://www.basketball-reference.com/teams/HOU/2026/on-off/',
-            'https://www.basketball-reference.com/teams/HOU/2026.html',
-            'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json',
-            'https://www.nba.com/stats/team/1610612745/onoffcourt-advanced?Season=2025-26&SeasonType=Regular%20Season',
-            'https://api.pbpstats.com/'
-          ]
-          headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36'}
-          out={}
-          for u in urls:
-            try:
-              r=requests.get(u,headers=headers,timeout=30,allow_redirects=True)
-              out[u]={'status':r.status_code,'length':len(r.content),'final_url':r.url,'head':r.text[:250]}
-            except Exception as e:
-              out[u]={'error':repr(e)}
-          open('alternate_test_result.json','w').write(json.dumps(out,indent=2))
-          print(json.dumps(out,indent=2))
+          import requests, pandas as pd, json, re
+          from bs4 import BeautifulSoup, Comment
+          u='https://www.basketball-reference.com/teams/HOU/2026/on-off/'
+          h={'User-Agent':'Mozilla/5.0'}
+          text=requests.get(u,headers=h,timeout=60).text
+          # BRef sometimes wraps tables in HTML comments.
+          expanded=text + '\n'.join(c for c in BeautifulSoup(text,'lxml').find_all(string=lambda x:isinstance(x,Comment)))
+          tables=pd.read_html(expanded)
+          out=[]
+          for i,t in enumerate(tables):
+            out.append({'index':i,'shape':list(t.shape),'columns':[str(x) for x in t.columns],'head':t.head(8).astype(str).to_dict('records')})
+          open('hou_tables.json','w').write(json.dumps(out,indent=2))
+          open('hou_onoff.html','w').write(text)
+          print(json.dumps(out,indent=2)[:12000])
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: alternate-source-result
-          path: alternate_test_result.json
+          name: hou-table-inspection
+          path: |
+            hou_tables.json
+            hou_onoff.html
