@@ -1,0 +1,31 @@
+name: Package NBA headshots
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/package-nba-headshots.yml'
+      - 'headshot-packager-trigger.txt'
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download official NBA CDN headshots
+        run: |
+          mkdir -p headshots
+          curl -fL --retry 3 -o headshots/steven_adams_203500.png https://cdn.nba.com/headshots/nba/latest/1040x760/203500.png
+          curl -fL --retry 3 -o headshots/domantas_sabonis_1627734.png https://cdn.nba.com/headshots/nba/latest/1040x760/1627734.png
+          curl -fL --retry 3 -o headshots/andre_drummond_203083.png https://cdn.nba.com/headshots/nba/latest/1040x760/203083.png
+          curl -fL --retry 3 -o headshots/mitchell_robinson_1629011.png https://cdn.nba.com/headshots/nba/latest/1040x760/1629011.png
+          curl -fL --retry 3 -o headshots/nikola_jokic_203999.png https://cdn.nba.com/headshots/nba/latest/1040x760/203999.png
+          curl -fL --retry 3 -o headshots/rudy_gobert_203497.png https://cdn.nba.com/headshots/nba/latest/1040x760/203497.png
+          curl -fL --retry 3 -o headshots/kevon_looney_1626172.png https://cdn.nba.com/headshots/nba/latest/1040x760/1626172.png
+          curl -fL --retry 3 -o headshots/clint_capela_203991.png https://cdn.nba.com/headshots/nba/latest/1040x760/203991.png
+          curl -fL --retry 3 -o headshots/ivica_zubac_1627826.png https://cdn.nba.com/headshots/nba/latest/1040x760/1627826.png
+          curl -fL --retry 3 -o headshots/victor_wembanyama_1641705.png https://cdn.nba.com/headshots/nba/latest/1040x760/1641705.png
+          curl -fL --retry 3 -o headshots/giannis_antetokounmpo_203507.png https://cdn.nba.com/headshots/nba/latest/1040x760/203507.png
+          file headshots/*
+      - name: Upload headshots zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-nba-headshots-case-study
+          path: headshots/*.png
+          if-no-files-found: error
