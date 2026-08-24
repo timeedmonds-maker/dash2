@@ -1,0 +1,44 @@
+name: Fetch five-year boxscore
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fetch-five-year-boxscore.yml'
+      - 'five-year-boxscore-trigger.txt'
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install nba_api pandas
+      - name: Fetch five-season player totals
+        run: |
+          python - <<'PY'
+          import pandas as pd, time
+          from nba_api.stats.endpoints import leaguedashplayerstats
+          ids={203500:'Steven Adams',1627734:'Domantas Sabonis',203083:'Andre Drummond',1629011:'Mitchell Robinson',203999:'Nikola Jokic',203497:'Rudy Gobert',1626172:'Kevon Looney',203991:'Clint Capela',1627826:'Ivica Zubac',1641705:'Victor Wembanyama',203507:'Giannis Antetokounmpo'}
+          seasons=['2021-22','2022-23','2023-24','2024-25','2025-26']
+          rows=[]
+          for s in seasons:
+              df=leaguedashplayerstats.LeagueDashPlayerStats(season=s,season_type_all_star='Regular Season',per_mode_detailed='Totals',timeout=60).get_data_frames()[0]
+              keep=df[df.PLAYER_ID.isin(ids)][['PLAYER_ID','PLAYER_NAME','GP','MIN','OREB','DREB','REB']].copy()
+              keep['SEASON']=s
+              rows.append(keep)
+              time.sleep(1)
+          allx=pd.concat(rows,ignore_index=True)
+          allx.to_csv('five_year_boxscore_by_season.csv',index=False)
+          agg=allx.groupby(['PLAYER_ID','PLAYER_NAME'],as_index=False)[['GP','MIN','OREB','DREB','REB']].sum()
+          agg['REB36']=agg.REB*36/agg.MIN
+          agg['OREB36']=agg.OREB*36/agg.MIN
+          agg['DREB36']=agg.DREB*36/agg.MIN
+          agg.to_csv('five_year_boxscore_aggregate.csv',index=False)
+          print(agg.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: five-year-boxscore
+          path: |
+            five_year_boxscore_by_season.csv
+            five_year_boxscore_aggregate.csv
