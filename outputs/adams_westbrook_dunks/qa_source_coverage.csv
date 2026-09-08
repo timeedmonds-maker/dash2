@@ -1,0 +1,13 @@
+season,season_type,source_rows,matches,source_url
+2013-14,Regular Season,560842,2,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-2014/data.rds
+2013-14,Playoffs,40446,4,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-playoffs2014/data.rds
+2014-15,Regular Season,563671,31,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-2015/data.rds
+2014-15,Playoffs,38517,0,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-playoffs2015/data.rds
+2015-16,Regular Season,569828,66,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-2016/data.rds
+2015-16,Playoffs,39833,14,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-playoffs2016/data.rds
+2016-17,Regular Season,567184,76,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-2017/data.rds
+2016-17,Playoffs,36146,4,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-playoffs2017/data.rds
+2017-18,Regular Season,572730,100,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-2018/data.rds
+2017-18,Playoffs,38059,11,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-playoffs2018/data.rds
+2018-19,Regular Season,600382,68,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-2019/data.rds
+2018-19,Playoffs,40277,5,https://raw.githubusercontent.com/ramirobentes/nba_pbp_data/main/pbp-final-playoffs2019/data.rds
