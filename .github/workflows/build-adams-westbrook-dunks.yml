@@ -1,0 +1,28 @@
+name: Build Adams-Westbrook Dunks
+on:
+  push:
+    branches: [agent/adams-westbrook-dunks]
+    paths:
+      - 'analysis/adams_westbrook_dunks.py'
+      - '.github/workflows/build-adams-westbrook-dunks.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pandas pyreadr requests
+      - run: python analysis/adams_westbrook_dunks.py
+      - name: Commit outputs
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add outputs/adams_westbrook_dunks/
+          git commit -m 'Build Adams-Westbrook dunk event links' || true
+          git pull --rebase || true
+          git push
