@@ -1,0 +1,31 @@
+name: PBP league totals probe
+on:
+  push:
+    paths:
+      - '.github/workflows/pbp-league-totals-probe.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests
+      - run: |
+          python - <<'PY'
+          import requests, json
+          H={"Accept":"application/json","Origin":"https://www.pbpstats.com","Referer":"https://www.pbpstats.com/","User-Agent":"Mozilla/5.0"}
+          variants=[
+            {"Season":"2025-26","SeasonType":"Regular Season","Type":"Player"},
+            {"Season":"2025-26","SeasonType":"Regular Season","Type":"Player","TeamId":"0"},
+          ]
+          for p in variants:
+            r=requests.get("https://api.pbpstats.com/get-totals/nba",params=p,headers=H,timeout=30)
+            print("STATUS",r.status_code,"URL",r.url,"LEN",len(r.text))
+            print(r.text[:500])
+            if r.status_code==200:
+              x=r.json(); rows=x.get("multi_row_table_data") or []
+              print("ROWS",len(rows),"TEAMS",len(set(str(z.get("TeamId")) for z in rows)))
+          PY
