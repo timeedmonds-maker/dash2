@@ -35,7 +35,13 @@ jobs:
           }
           out={}
           for name,(url,params) in urls.items():
-            r=s.get(url,params=params,timeout=90); r.raise_for_status(); p=r.json()
+            r=s.get(url,params=params,timeout=90)
+            out[name+"_status"]=r.status_code
+            out[name+"_url"]=r.url
+            out[name+"_body_head"]=r.text[:1000]
+            if r.status_code != 200:
+              continue
+            p=r.json()
             if name=="totals":
               rows=p.get("multi_row_table_data") or []
               out["totals_row_count"]=len(rows)
@@ -47,10 +53,10 @@ jobs:
               wanted=[k for k in res if any(t in k.lower() for t in ["poss","point","pts","pace","rating"])]
               out["onoff_wanted_keys"]=wanted
               out["onoff_samples"]={k:(res[k][0] if res.get(k) else None) for k in wanted}
-          with open("schema_probe.json","w") as f: json.dump(out,f,indent=2)
+          print(json.dumps(out,indent=2))\n          with open("schema_probe.json","w") as f: json.dump(out,f,indent=2)
           print(json.dumps(out,indent=2))
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4\n        if: always()
         with:
           name: pbpstats-schema-probe
           path: schema_probe.json
