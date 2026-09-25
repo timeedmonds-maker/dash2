@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -20,20 +20,11 @@ jobs:
       - name: Build pooled five-season leaderboard
         run: |
           cat > build.py <<'PY'
-          import concurrent.futures as cf
-          import json, math, random, time, unicodedata
+          import json, math, random, time
           import pandas as pd
           import requests
 
           SEASONS=["2021-22","2022-23","2023-24","2024-25","2025-26"]
-          TEAM_IDS=[
-            1610612737,1610612738,1610612739,1610612740,1610612741,
-            1610612742,1610612743,1610612744,1610612745,1610612746,
-            1610612747,1610612748,1610612749,1610612750,1610612751,
-            1610612752,1610612753,1610612754,1610612755,1610612756,
-            1610612757,1610612758,1610612759,1610612760,1610612761,
-            1610612762,1610612763,1610612764,1610612765,1610612766,
-          ]
           URL="https://api.pbpstats.com/get-totals/nba"
           HEADERS={
             "Accept":"application/json, text/plain, */*",
@@ -42,42 +33,26 @@ jobs:
             "User-Agent":"Mozilla/5.0 AppleWebKit/537.36 Chrome/131 Safari/537.36",
           }
 
-          def get_one(key):
-            season,team_id=key
-            params={"Season":season,"SeasonType":"Regular Season","TeamId":str(team_id),"Type":"Player"}
+          def fetch(season):
+            params={"Season":season,"SeasonType":"Regular Season","Type":"Player"}
             err=None
             for attempt in range(1,7):
               try:
                 r=requests.get(URL,params=params,headers=HEADERS,timeout=(10,90))
                 if r.status_code in (429,500,502,503,504):
                   raise RuntimeError(f"HTTP {r.status_code}")
-                if r.status_code==400:
-                  return {"season":season,"team_id":team_id,"rows":[],"absent":True,"error":r.text[:300]}
                 r.raise_for_status()
-                p=r.json()
-                rows=p.get("multi_row_table_data") or []
-                return {"season":season,"team_id":team_id,"rows":rows,"absent":False}
+                rows=(r.json().get("multi_row_table_data") or [])
+                print(f"{season}: {len(rows)} player rows",flush=True)
+                return rows
               except Exception as e:
                 err=repr(e)
                 if attempt<6: time.sleep(min(2**(attempt-1),8)+random.random())
-            return {"season":season,"team_id":team_id,"rows":[],"absent":False,"error":err}
-
-          keys=[(s,t) for s in SEASONS for t in TEAM_IDS]
-          results=[]
-          with cf.ThreadPoolExecutor(max_workers=6) as ex:
-            futs={ex.submit(get_one,k):k for k in keys}
-            for n,f in enumerate(cf.as_completed(futs),1):
-              z=f.result(); results.append(z)
-              print(f"{n:03d}/150 {z['season']} {z['team_id']} rows={len(z['rows'])} error={z.get('error','')}",flush=True)
-
-          failures=[z for z in results if z.get("error") and not z.get("absent")]
-          if failures:
-            print("FAILURES",json.dumps(failures,indent=2)[:10000])
-            raise SystemExit(f"{len(failures)} team-season requests failed")
+            raise RuntimeError(f"{season} failed: {err}")
 
           rows=[]
-          for z in results:
-            for x in z["rows"]:
+          for season in SEASONS:
+            for x in fetch(season):
               pid=str(x.get("EntityId") or x.get("RowId") or x.get("PlayerId") or "").strip()
               name=str(x.get("Name") or x.get("ShortName") or "").strip()
               if not pid or not name: continue
@@ -90,31 +65,27 @@ jobs:
               if mins is None:
                 sec=num("SecondsPlayed"); mins=(sec/60 if sec is not None else None)
               rows.append({
-                "season":z["season"],"team_id":z["team_id"],"player_id":pid,"player_name":name,
-                "team":str(x.get("TeamAbbreviation") or ""),
+                "season":season,"player_id":pid,"player_name":name,
                 "minutes":mins,"fg3a":num("FG3A") or 0.0,
                 "off_poss":num("OffPoss"),"def_poss":num("DefPoss"),
                 "ortg":num("OnOffRtg"),"drtg":num("OnDefRtg"),
+                "team_id":str(x.get("TeamId") or ""),"team":str(x.get("TeamAbbreviation") or ""),
               })
-          d=pd.DataFrame(rows)
-          d.to_csv("player_team_season_source_rows.csv",index=False)
 
-          # Keep actual played stints with the full rating denominators.
+          d=pd.DataFrame(rows)
+          d.to_csv("season_source_rows.csv",index=False)
+
           q=d[(d.minutes>0)&(d.off_poss>0)&(d.def_poss>0)&d.ortg.notna()&d.drtg.notna()].copy()
           q["off_points_equiv"]=q.ortg*q.off_poss/100.0
           q["def_points_equiv"]=q.drtg*q.def_poss/100.0
 
-          # Aggregate by stable NBA player ID across all seasons and all team stints.
-          def names(s):
+          def name_last(s):
             vals=list(dict.fromkeys(str(v) for v in s if pd.notna(v) and str(v)))
             return vals[-1] if vals else ""
-          def teams(s):
-            return ",".join(sorted(set(str(v) for v in s if pd.notna(v) and str(v))))
+
           g=q.groupby("player_id",as_index=False).agg(
-            player_name=("player_name",names),
-            seasons=("season","nunique"),
-            team_stints=("team","count"),
-            teams=("team",teams),
+            player_name=("player_name",name_last),
+            seasons_played=("season","nunique"),
             minutes=("minutes","sum"),
             fg3a=("fg3a","sum"),
             off_poss=("off_poss","sum"),
@@ -129,37 +100,39 @@ jobs:
           g=g[g.fg3a<20].copy()
           g=g.sort_values(["pooled_net_rating","minutes"],ascending=[False,False]).reset_index(drop=True)
           g.insert(0,"rank",range(1,len(g)+1))
-          cols=["rank","player_name","player_id","pooled_net_rating","pooled_ortg","pooled_drtg","fg3a","minutes","off_poss","def_poss","seasons","teams"]
-          g[cols].to_csv("nonshooters_under20_3pa_5yr_all.csv",index=False)
-          g[cols].head(20).to_csv("top20_nonshooters_under20_3pa_5yr.csv",index=False)
-          g[g.minutes>=1000][cols].head(20).to_csv("top20_nonshooters_under20_3pa_5yr_min1000.csv",index=False)
+          cols=["rank","player_name","player_id","pooled_net_rating","pooled_ortg","pooled_drtg","fg3a","minutes","off_poss","def_poss","seasons_played"]
+          raw=g[cols]
+          raw.to_csv("nonshooters_under20_3pa_5yr_all.csv",index=False)
+          raw.head(20).to_csv("top20_raw.csv",index=False)
+
+          qual=g[g.minutes>=1000].copy().reset_index(drop=True)
+          qual["rank"]=range(1,len(qual)+1)
+          qual[cols].head(20).to_csv("top20_min1000.csv",index=False)
 
           summary={
             "seasons":SEASONS,
-            "filter":"sum(FG3A) < 20 across all five regular seasons",
+            "source":"PBP Stats get-totals/nba, Type=Player, Regular Season",
+            "filter":"sum(FG3A) < 20 across 2021-22 through 2025-26",
             "ranking":"pooled on-court net rating",
-            "pooling":"100*sum(OnOffRtg*OffPoss/100)/sum(OffPoss) - 100*sum(OnDefRtg*DefPoss/100)/sum(DefPoss)",
-            "team_seasons_requested":len(keys),
-            "team_seasons_returned":sum(1 for z in results if z["rows"]),
-            "source_player_team_season_rows":len(d),
+            "pooling":"pooled ORtg = sum(OnOffRtg*OffPoss)/sum(OffPoss); pooled DRtg = sum(OnDefRtg*DefPoss)/sum(DefPoss); net = ORtg-DRtg",
+            "season_rows":len(d),
             "eligible_players":len(g),
           }
           with open("summary.json","w") as f: json.dump(summary,f,indent=2)
 
-          print("\nSUMMARY")
-          print(json.dumps(summary,indent=2))
+          print("\nSUMMARY\n"+json.dumps(summary,indent=2))
           print("\nTOP20_RAW")
-          print(g[cols].head(20).to_csv(index=False))
+          print(raw.head(20).to_csv(index=False))
           print("\nTOP20_MIN1000")
-          print(g[g.minutes>=1000][cols].head(20).to_csv(index=False))
+          print(qual[cols].head(20).to_csv(index=False))
           PY
           python build.py
       - uses: actions/upload-artifact@v4
         with:
           name: nonshooter-netrating-5yr
           path: |
-            top20_nonshooters_under20_3pa_5yr.csv
-            top20_nonshooters_under20_3pa_5yr_min1000.csv
+            top20_raw.csv
+            top20_min1000.csv
             nonshooters_under20_3pa_5yr_all.csv
-            player_team_season_source_rows.csv
+            season_source_rows.csv
             summary.json
