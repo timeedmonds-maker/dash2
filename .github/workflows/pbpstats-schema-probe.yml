@@ -1,0 +1,55 @@
+name: PBP Stats schema probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/pbpstats-schema-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Probe canonical PBP Stats schema
+        run: |
+          python - <<'PY'
+          import json, requests
+          H={
+            "Accept":"application/json, text/plain, */*",
+            "Origin":"https://www.pbpstats.com",
+            "Referer":"https://www.pbpstats.com/",
+            "User-Agent":"Mozilla/5.0 AppleWebKit/537.36 Chrome/131 Safari/537.36",
+          }
+          s=requests.Session(); s.headers.update(H)
+          common={"Season":"2025-26","SeasonType":"Regular Season","TeamId":"1610612745"}
+          urls={
+            "totals":("https://api.pbpstats.com/get-totals/nba",{**common,"Type":"Player"}),
+            "onoff":("https://api.pbpstats.com/get-on-off/nba/team",common),
+          }
+          out={}
+          for name,(url,params) in urls.items():
+            r=s.get(url,params=params,timeout=90); r.raise_for_status(); p=r.json()
+            if name=="totals":
+              rows=p.get("multi_row_table_data") or []
+              out["totals_row_count"]=len(rows)
+              out["totals_keys"]=sorted(rows[0].keys()) if rows else []
+              out["totals_sample"]=rows[0] if rows else None
+            else:
+              res=p.get("results") or {}
+              out["onoff_metric_keys"]=sorted(res.keys())
+              wanted=[k for k in res if any(t in k.lower() for t in ["poss","point","pts","pace","rating"])]
+              out["onoff_wanted_keys"]=wanted
+              out["onoff_samples"]={k:(res[k][0] if res.get(k) else None) for k in wanted}
+          with open("schema_probe.json","w") as f: json.dump(out,f,indent=2)
+          print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pbpstats-schema-probe
+          path: schema_probe.json
