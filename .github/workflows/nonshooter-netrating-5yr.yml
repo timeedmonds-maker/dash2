@@ -105,9 +105,9 @@ jobs:
           raw.to_csv("nonshooters_under20_3pa_5yr_all.csv",index=False)
           raw.head(20).to_csv("top20_raw.csv",index=False)
 
-          qual=g[g.minutes>=1000].copy().reset_index(drop=True)
+          qual=g[g.minutes>=3000].copy().reset_index(drop=True)
           qual["rank"]=range(1,len(qual)+1)
-          qual[cols].head(20).to_csv("top20_min1000.csv",index=False)
+          qual[cols].head(20).to_csv("top20_min3000.csv",index=False)
 
           summary={
             "seasons":SEASONS,
@@ -123,7 +123,7 @@ jobs:
           print("\nSUMMARY\n"+json.dumps(summary,indent=2))
           print("\nTOP20_RAW")
           print(raw.head(20).to_csv(index=False))
-          print("\nTOP20_MIN1000")
+          print("\nTOP20_MIN3000")
           print(qual[cols].head(20).to_csv(index=False))
           PY
           python build.py
@@ -132,7 +132,7 @@ jobs:
           name: nonshooter-netrating-5yr
           path: |
             top20_raw.csv
-            top20_min1000.csv
+            top20_min3000.csv
             nonshooters_under20_3pa_5yr_all.csv
             season_source_rows.csv
             summary.json
