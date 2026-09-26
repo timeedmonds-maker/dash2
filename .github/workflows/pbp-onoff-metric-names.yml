@@ -1,0 +1,26 @@
+name: PBP Stats onoff metric names
+on:
+  push:
+    paths:
+      - '.github/workflows/pbp-onoff-metric-names.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests
+      - run: |
+          python - <<'PY'
+          import json, requests
+          s=requests.Session(); s.headers.update({"Accept":"application/json, text/plain, */*","Origin":"https://www.pbpstats.com","Referer":"https://www.pbpstats.com/","User-Agent":"Mozilla/5.0 AppleWebKit/537.36 Chrome/131 Safari/537.36"})
+          p=s.get("https://api.pbpstats.com/get-on-off/nba/team",params={"Season":"2025-26","SeasonType":"Regular Season","TeamId":"1610612745","PlayerId":"203500"},timeout=90).json()
+          rows=p.get("results") or []
+          out={"stats":[r.get("Stat") for r in rows],"relevant":[r for r in rows if any(t in str(r.get("Stat","")).lower() for t in ["100 possession","point","rating","possessions"])]}
+          print(json.dumps(out,indent=2)); open("metrics.json","w").write(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with: {name: pbp-onoff-metric-names, path: metrics.json}
