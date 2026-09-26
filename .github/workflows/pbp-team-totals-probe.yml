@@ -1,0 +1,19 @@
+name: PBP team totals probe
+on:
+  push:
+    paths: ['.github/workflows/pbp-team-totals-probe.yml']
+permissions: {contents: read}
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests
+      - run: |
+          python - <<'PY'
+          import requests,json
+          r=requests.get('https://api.pbpstats.com/get-totals/nba',params={'Season':'2025-26','SeasonType':'Regular Season','TeamId':'1610612745','Type':'Team'},timeout=30)
+          print('STATUS',r.status_code)
+          print(r.text[:3000])
+          PY
