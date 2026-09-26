@@ -1,0 +1,39 @@
+name: PBP Stats player-filtered onoff probe
+on:
+  push:
+    paths:
+      - '.github/workflows/pbp-onoff-player-probe.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Probe player-filtered team onoff
+        run: |
+          python - <<'PY'
+          import json, requests
+          H={"Accept":"application/json, text/plain, */*","Origin":"https://www.pbpstats.com","Referer":"https://www.pbpstats.com/","User-Agent":"Mozilla/5.0 AppleWebKit/537.36 Chrome/131 Safari/537.36"}
+          s=requests.Session(); s.headers.update(H)
+          params={"Season":"2025-26","SeasonType":"Regular Season","TeamId":"1610612745","PlayerId":"203500"}
+          r=s.get("https://api.pbpstats.com/get-on-off/nba/team",params=params,timeout=90)
+          out={"status":r.status_code,"url":r.url,"body_head":r.text[:3000]}
+          if r.status_code==200:
+              p=r.json(); res=p.get("results") or {}
+              out["metric_keys"]=sorted(res.keys())
+              wanted=[k for k in res if any(t in k.lower() for t in ["poss","point","pts","rating","rtg"])]
+              out["wanted_keys"]=wanted
+              out["wanted_samples"]={k:res.get(k) for k in wanted}
+          print(json.dumps(out,indent=2))
+          open("onoff_probe.json","w").write(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pbp-onoff-player-probe
+          path: onoff_probe.json
