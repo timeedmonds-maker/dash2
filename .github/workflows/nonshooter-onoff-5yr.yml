@@ -1,0 +1,136 @@
+name: Five-year non-shooter on-off
+on:
+  push:
+    paths:
+      - '.github/workflows/nonshooter-onoff-5yr.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests pandas
+      - name: Build pooled on-off table
+        run: |
+          cat > build_onoff.py <<'PY'
+          import json, time, requests, pandas as pd
+
+          H={"Accept":"application/json, text/plain, */*","Origin":"https://www.pbpstats.com","Referer":"https://www.pbpstats.com/","User-Agent":"Mozilla/5.0 AppleWebKit/537.36 Chrome/131 Safari/537.36"}
+          s=requests.Session(); s.headers.update(H)
+          TOTALS="https://api.pbpstats.com/get-totals/nba"
+          ONOFF="https://api.pbpstats.com/get-on-off/nba/team"
+          tids={'ATL':1610612737,'BOS':1610612738,'CHO':1610612766,'DAL':1610612742,'DET':1610612765,'HOU':1610612745,'IND':1610612754,'LAC':1610612746,'MEM':1610612763,'MIL':1610612749,'MIN':1610612750,'NOP':1610612740,'NYK':1610612752,'PHO':1610612756,'SAC':1610612758,'SAS':1610612759,'TOR':1610612761,'UTA':1610612762,'WAS':1610612764}
+          pids={'Clint Capela':203991,'Daniel Gafford':1629655,'Ivica Zubac':1627826,'Jakob Poeltl':1627751,'Jalen Duren':1631105,'Jericho Sims':1630579,'Mark Williams':1631109,'Mason Plumlee':203486,'Mitchell Robinson':1629011,'Moussa Diabaté':1631217,'Neemias Queta':1629674,'Rudy Gobert':203497,'Steven Adams':203500,'Yves Missi':1642274}
+          stints=[
+          ('Clint Capela','2021-22','ATL'),('Clint Capela','2022-23','ATL'),('Clint Capela','2023-24','ATL'),('Clint Capela','2024-25','ATL'),('Clint Capela','2025-26','HOU'),
+          ('Daniel Gafford','2021-22','WAS'),('Daniel Gafford','2022-23','WAS'),('Daniel Gafford','2023-24','WAS'),('Daniel Gafford','2023-24','DAL'),('Daniel Gafford','2024-25','DAL'),('Daniel Gafford','2025-26','DAL'),
+          ('Ivica Zubac','2021-22','LAC'),('Ivica Zubac','2022-23','LAC'),('Ivica Zubac','2023-24','LAC'),('Ivica Zubac','2024-25','LAC'),('Ivica Zubac','2025-26','LAC'),('Ivica Zubac','2025-26','IND'),
+          ('Jakob Poeltl','2021-22','SAS'),('Jakob Poeltl','2022-23','SAS'),('Jakob Poeltl','2022-23','TOR'),('Jakob Poeltl','2023-24','TOR'),('Jakob Poeltl','2024-25','TOR'),('Jakob Poeltl','2025-26','TOR'),
+          ('Jalen Duren','2022-23','DET'),('Jalen Duren','2023-24','DET'),('Jalen Duren','2024-25','DET'),('Jalen Duren','2025-26','DET'),
+          ('Jericho Sims','2021-22','NYK'),('Jericho Sims','2022-23','NYK'),('Jericho Sims','2023-24','NYK'),('Jericho Sims','2024-25','NYK'),('Jericho Sims','2024-25','MIL'),('Jericho Sims','2025-26','MIL'),
+          ('Mark Williams','2022-23','CHO'),('Mark Williams','2023-24','CHO'),('Mark Williams','2024-25','CHO'),('Mark Williams','2025-26','PHO'),
+          ('Mason Plumlee','2021-22','CHO'),('Mason Plumlee','2022-23','CHO'),('Mason Plumlee','2022-23','LAC'),('Mason Plumlee','2023-24','LAC'),('Mason Plumlee','2024-25','PHO'),('Mason Plumlee','2025-26','CHO'),('Mason Plumlee','2025-26','SAS'),
+          ('Mitchell Robinson','2021-22','NYK'),('Mitchell Robinson','2022-23','NYK'),('Mitchell Robinson','2023-24','NYK'),('Mitchell Robinson','2024-25','NYK'),('Mitchell Robinson','2025-26','NYK'),
+          ('Moussa Diabaté','2022-23','LAC'),('Moussa Diabaté','2023-24','LAC'),('Moussa Diabaté','2024-25','CHO'),('Moussa Diabaté','2025-26','CHO'),
+          ('Neemias Queta','2021-22','SAC'),('Neemias Queta','2022-23','SAC'),('Neemias Queta','2023-24','BOS'),('Neemias Queta','2024-25','BOS'),('Neemias Queta','2025-26','BOS'),
+          ('Rudy Gobert','2021-22','UTA'),('Rudy Gobert','2022-23','MIN'),('Rudy Gobert','2023-24','MIN'),('Rudy Gobert','2024-25','MIN'),('Rudy Gobert','2025-26','MIN'),
+          ('Steven Adams','2021-22','MEM'),('Steven Adams','2022-23','MEM'),('Steven Adams','2024-25','HOU'),('Steven Adams','2025-26','HOU'),
+          ('Yves Missi','2024-25','NOP'),('Yves Missi','2025-26','NOP')]
+
+          def get(url,params,tries=5):
+              last=None
+              for i in range(tries):
+                  try:
+                      r=s.get(url,params=params,timeout=90)
+                      if r.status_code==200:return r.json()
+                      last=f"{r.status_code} {r.text[:300]}"
+                  except Exception as e:last=repr(e)
+                  time.sleep(1.5*(i+1))
+              raise RuntimeError(last)
+
+          team_cache={}
+          player_cache={}
+          def player_rows(season,team):
+              k=(season,team)
+              if k not in player_cache:
+                  p=get(TOTALS,{"Season":season,"SeasonType":"Regular Season","TeamId":str(tids[team]),"Type":"Player"})
+                  player_cache[k]=p.get("multi_row_table_data") or []
+              return player_cache[k]
+
+          def team_row(season,team):
+              k=(season,team)
+              if k not in team_cache:
+                  p=get(TOTALS,{"Season":season,"SeasonType":"Regular Season","TeamId":str(tids[team]),"Type":"Team"})
+                  rows=p.get("multi_row_table_data") or []
+                  one=p.get("single_row_table_data") or {}
+                  candidates=rows + ([one] if one else [])
+                  if not candidates: raise RuntimeError(f"no team totals {k}: {p.keys()}")
+                  row=next((x for x in candidates if str(x.get("TeamId",""))==str(tids[team])),candidates[0])
+                  team_cache[k]=row
+              return team_cache[k]
+
+          out=[]; errs=[]
+          for idx,(name,season,team) in enumerate(stints,1):
+              print("STINT",idx,len(stints),name,season,team,flush=True)
+              try:
+                  prow=next((x for x in player_rows(season,team) if str(x.get("EntityId") or x.get("PlayerId") or x.get("RowId"))==str(pids[name])),None)
+                  if not prow:
+                      print("NO PLAYER ROW",name,season,team,flush=True); continue
+                  trow=team_row(season,team)
+                  oo=get(ONOFF,{"Season":season,"SeasonType":"Regular Season","TeamId":str(tids[team]),"PlayerId":str(pids[name])})
+                  stats={r.get("Stat"):r for r in (oo.get("results") or []) if isinstance(r,dict)}
+                  o=stats.get("Pts per 100 Possessions"); d=stats.get("Pts per 100 Possessions - Defense")
+                  if not o or not d: raise RuntimeError("missing ORtg/DRtg onoff stats")
+                  on_offposs=float(prow.get("OffPoss") or 0); on_defposs=float(prow.get("DefPoss") or 0)
+                  team_offposs=float(trow.get("OffPoss") or 0); team_defposs=float(trow.get("DefPoss") or 0)
+                  off_offposs=max(0.0,team_offposs-on_offposs); off_defposs=max(0.0,team_defposs-on_defposs)
+                  out.append({
+                    "player":name,"player_id":pids[name],"season":season,"team":team,
+                    "minutes":float(prow.get("Minutes") or (float(prow.get("SecondsPlayed") or 0)/60)),
+                    "fg3a":float(prow.get("FG3A") or 0),
+                    "on_offposs":on_offposs,"on_defposs":on_defposs,
+                    "on_ortg":float(prow.get("OnOffRtg")),"on_drtg":float(prow.get("OnDefRtg")),
+                    "team_offposs":team_offposs,"team_defposs":team_defposs,
+                    "off_offposs":off_offposs,"off_defposs":off_defposs,
+                    "off_ortg":float(o["Off"]),"off_drtg":float(d["Off"])
+                  })
+              except Exception as e:
+                  errs.append({"player":name,"season":season,"team":team,"error":repr(e)})
+                  print("ERR",repr(e),flush=True)
+              time.sleep(.15)
+
+          df=pd.DataFrame(out)
+          df.to_csv("stint_details.csv",index=False)
+          pd.DataFrame(errs).to_csv("errors.csv",index=False)
+          rows=[]
+          for name,g in df.groupby("player"):
+              def wavg(col,w):
+                  den=g[w].sum()
+                  return (g[col]*g[w]).sum()/den if den else float("nan")
+              on_o=wavg("on_ortg","on_offposs"); on_d=wavg("on_drtg","on_defposs")
+              off_o=wavg("off_ortg","off_offposs"); off_d=wavg("off_drtg","off_defposs")
+              rows.append({"player":name,"minutes":g.minutes.sum(),"fg3a":g.fg3a.sum(),
+                           "on_ortg":on_o,"on_drtg":on_d,"on_net":on_o-on_d,
+                           "off_ortg":off_o,"off_drtg":off_d,"off_net":off_o-off_d,
+                           "swing":(on_o-on_d)-(off_o-off_d),
+                           "stints":len(g),"seasons":g.season.nunique()})
+          z=pd.DataFrame(rows)
+          z=z[(z.minutes>=3000)&(z.fg3a<20)].sort_values(["on_net","minutes"],ascending=[False,False]).reset_index(drop=True)
+          z.insert(0,"rank",range(1,len(z)+1))
+          z.to_csv("nonshooter_onoff_5yr_min3000.csv",index=False)
+          print("\nRESULT\n",z.to_string(index=False),flush=True)
+          print("\nERRORS\n",pd.DataFrame(errs).to_string(index=False),flush=True)
+          PY
+          python build_onoff.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nonshooter-onoff-5yr
+          path: |
+            nonshooter_onoff_5yr_min3000.csv
+            stint_details.csv
+            errors.csv
