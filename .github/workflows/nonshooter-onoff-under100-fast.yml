@@ -1,0 +1,145 @@
+name: Five-year under-100 3PA on-off fast
+on:
+  push:
+    paths:
+      - '.github/workflows/nonshooter-onoff-under100-fast.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests pandas
+      - name: Build exact pooled on-off table
+        run: |
+          cat > build.py <<'PY'
+          import time, requests, pandas as pd
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+
+          H={"Accept":"application/json, text/plain, */*","Origin":"https://www.pbpstats.com","Referer":"https://www.pbpstats.com/","User-Agent":"Mozilla/5.0 AppleWebKit/537.36 Chrome/131 Safari/537.36"}
+          TOTALS="https://api.pbpstats.com/get-totals/nba"
+          ONOFF="https://api.pbpstats.com/get-on-off/nba/team"
+          tids={'ATL':1610612737,'BOS':1610612738,'BRK':1610612751,'CHO':1610612766,'CHI':1610612741,'CLE':1610612739,'DAL':1610612742,'DEN':1610612743,'DET':1610612765,'GSW':1610612744,'HOU':1610612745,'IND':1610612754,'LAC':1610612746,'LAL':1610612747,'MEM':1610612763,'MIA':1610612748,'MIL':1610612749,'MIN':1610612750,'NOP':1610612740,'NYK':1610612752,'OKC':1610612760,'ORL':1610612753,'PHI':1610612755,'PHO':1610612756,'POR':1610612757,'SAC':1610612758,'SAS':1610612759,'TOR':1610612761,'UTA':1610612762,'WAS':1610612764}
+          pids={'Brandon Clarke':1629634,'Clint Capela':203991,'Daniel Gafford':1629655,'Deandre Ayton':1629028,'Drew Eubanks':1629234,'Dwight Powell':203939,'Isaiah Hartenstein':1628392,'Isaiah Jackson':1630543,'Ivica Zubac':1627826,'Jakob Poeltl':1627751,'Jalen Duren':1631105,'Jarrett Allen':1628386,'Jericho Sims':1630579,'Kevon Looney':1626172,'Luke Kornet':1628436,'Mark Williams':1631109,'Mason Plumlee':203486,'Mitchell Robinson':1629011,'Moussa Diabaté':1631217,'Neemias Queta':1629674,'Nic Claxton':1629651,'Nick Richards':1630208,'Robert Williams III':1629057,'Rudy Gobert':203497,'Steven Adams':203500,'Walker Kessler':1631117,'Yves Missi':1642274,'Zion Williamson':1629627}
+          stints=[
+          ('Brandon Clarke','2021-22','MEM'),('Brandon Clarke','2022-23','MEM'),('Brandon Clarke','2023-24','MEM'),('Brandon Clarke','2024-25','MEM'),('Brandon Clarke','2025-26','MEM'),
+          ('Clint Capela','2021-22','ATL'),('Clint Capela','2022-23','ATL'),('Clint Capela','2023-24','ATL'),('Clint Capela','2024-25','ATL'),('Clint Capela','2025-26','HOU'),
+          ('Daniel Gafford','2021-22','WAS'),('Daniel Gafford','2022-23','WAS'),('Daniel Gafford','2023-24','WAS'),('Daniel Gafford','2023-24','DAL'),('Daniel Gafford','2024-25','DAL'),('Daniel Gafford','2025-26','DAL'),
+          ('Deandre Ayton','2021-22','PHO'),('Deandre Ayton','2022-23','PHO'),('Deandre Ayton','2023-24','POR'),('Deandre Ayton','2024-25','POR'),('Deandre Ayton','2025-26','LAL'),
+          ('Drew Eubanks','2021-22','POR'),('Drew Eubanks','2021-22','SAS'),('Drew Eubanks','2022-23','POR'),('Drew Eubanks','2023-24','PHO'),('Drew Eubanks','2024-25','LAC'),('Drew Eubanks','2024-25','UTA'),('Drew Eubanks','2025-26','SAC'),
+          ('Dwight Powell','2021-22','DAL'),('Dwight Powell','2022-23','DAL'),('Dwight Powell','2023-24','DAL'),('Dwight Powell','2024-25','DAL'),('Dwight Powell','2025-26','DAL'),
+          ('Isaiah Hartenstein','2021-22','LAC'),('Isaiah Hartenstein','2022-23','NYK'),('Isaiah Hartenstein','2023-24','NYK'),('Isaiah Hartenstein','2024-25','OKC'),('Isaiah Hartenstein','2025-26','OKC'),
+          ('Isaiah Jackson','2021-22','IND'),('Isaiah Jackson','2022-23','IND'),('Isaiah Jackson','2023-24','IND'),('Isaiah Jackson','2024-25','IND'),('Isaiah Jackson','2025-26','IND'),('Isaiah Jackson','2025-26','LAC'),
+          ('Ivica Zubac','2021-22','LAC'),('Ivica Zubac','2022-23','LAC'),('Ivica Zubac','2023-24','LAC'),('Ivica Zubac','2024-25','LAC'),('Ivica Zubac','2025-26','LAC'),('Ivica Zubac','2025-26','IND'),
+          ('Jakob Poeltl','2021-22','SAS'),('Jakob Poeltl','2022-23','SAS'),('Jakob Poeltl','2022-23','TOR'),('Jakob Poeltl','2023-24','TOR'),('Jakob Poeltl','2024-25','TOR'),('Jakob Poeltl','2025-26','TOR'),
+          ('Jalen Duren','2022-23','DET'),('Jalen Duren','2023-24','DET'),('Jalen Duren','2024-25','DET'),('Jalen Duren','2025-26','DET'),
+          ('Jarrett Allen','2021-22','CLE'),('Jarrett Allen','2022-23','CLE'),('Jarrett Allen','2023-24','CLE'),('Jarrett Allen','2024-25','CLE'),('Jarrett Allen','2025-26','CLE'),
+          ('Jericho Sims','2021-22','NYK'),('Jericho Sims','2022-23','NYK'),('Jericho Sims','2023-24','NYK'),('Jericho Sims','2024-25','NYK'),('Jericho Sims','2024-25','MIL'),('Jericho Sims','2025-26','MIL'),
+          ('Kevon Looney','2021-22','GSW'),('Kevon Looney','2022-23','GSW'),('Kevon Looney','2023-24','GSW'),('Kevon Looney','2024-25','GSW'),('Kevon Looney','2025-26','NOP'),
+          ('Luke Kornet','2021-22','BOS'),('Luke Kornet','2021-22','CLE'),('Luke Kornet','2021-22','MIL'),('Luke Kornet','2022-23','BOS'),('Luke Kornet','2023-24','BOS'),('Luke Kornet','2024-25','BOS'),('Luke Kornet','2025-26','SAS'),
+          ('Mark Williams','2022-23','CHO'),('Mark Williams','2023-24','CHO'),('Mark Williams','2024-25','CHO'),('Mark Williams','2025-26','PHO'),
+          ('Mason Plumlee','2021-22','CHO'),('Mason Plumlee','2022-23','CHO'),('Mason Plumlee','2022-23','LAC'),('Mason Plumlee','2023-24','LAC'),('Mason Plumlee','2024-25','PHO'),('Mason Plumlee','2025-26','CHO'),('Mason Plumlee','2025-26','SAS'),
+          ('Mitchell Robinson','2021-22','NYK'),('Mitchell Robinson','2022-23','NYK'),('Mitchell Robinson','2023-24','NYK'),('Mitchell Robinson','2024-25','NYK'),('Mitchell Robinson','2025-26','NYK'),
+          ('Moussa Diabaté','2022-23','LAC'),('Moussa Diabaté','2023-24','LAC'),('Moussa Diabaté','2024-25','CHO'),('Moussa Diabaté','2025-26','CHO'),
+          ('Neemias Queta','2021-22','SAC'),('Neemias Queta','2022-23','SAC'),('Neemias Queta','2023-24','BOS'),('Neemias Queta','2024-25','BOS'),('Neemias Queta','2025-26','BOS'),
+          ('Nic Claxton','2021-22','BRK'),('Nic Claxton','2022-23','BRK'),('Nic Claxton','2023-24','BRK'),('Nic Claxton','2024-25','BRK'),('Nic Claxton','2025-26','BRK'),
+          ('Nick Richards','2021-22','CHO'),('Nick Richards','2022-23','CHO'),('Nick Richards','2023-24','CHO'),('Nick Richards','2024-25','CHO'),('Nick Richards','2024-25','PHO'),('Nick Richards','2025-26','PHO'),('Nick Richards','2025-26','CHI'),
+          ('Robert Williams III','2021-22','BOS'),('Robert Williams III','2022-23','BOS'),('Robert Williams III','2023-24','POR'),('Robert Williams III','2024-25','POR'),('Robert Williams III','2025-26','POR'),
+          ('Rudy Gobert','2021-22','UTA'),('Rudy Gobert','2022-23','MIN'),('Rudy Gobert','2023-24','MIN'),('Rudy Gobert','2024-25','MIN'),('Rudy Gobert','2025-26','MIN'),
+          ('Steven Adams','2021-22','MEM'),('Steven Adams','2022-23','MEM'),('Steven Adams','2024-25','HOU'),('Steven Adams','2025-26','HOU'),
+          ('Walker Kessler','2022-23','UTA'),('Walker Kessler','2023-24','UTA'),('Walker Kessler','2024-25','UTA'),('Walker Kessler','2025-26','UTA'),
+          ('Yves Missi','2024-25','NOP'),('Yves Missi','2025-26','NOP'),
+          ('Zion Williamson','2022-23','NOP'),('Zion Williamson','2023-24','NOP'),('Zion Williamson','2024-25','NOP'),('Zion Williamson','2025-26','NOP')]
+
+          def get(url,params,tries=6):
+              sess=requests.Session(); sess.headers.update(H)
+              last=None
+              for i in range(tries):
+                  try:
+                      r=sess.get(url,params=params,timeout=60)
+                      if r.status_code==200:return r.json()
+                      last=f"{r.status_code} {r.text[:200]}"
+                  except Exception as e:last=repr(e)
+                  time.sleep(.5*(i+1))
+              raise RuntimeError(last)
+
+          pairs=sorted(set((season,team) for _,season,team in stints))
+          def fetch_pair(k):
+              season,team=k; common={"Season":season,"SeasonType":"Regular Season","TeamId":str(tids[team])}
+              pp=get(TOTALS,{**common,"Type":"Player"}).get("multi_row_table_data") or []
+              tp=get(TOTALS,{**common,"Type":"Team"})
+              rows=tp.get("multi_row_table_data") or []; one=tp.get("single_row_table_data") or {}
+              cc=rows+([one] if one else [])
+              tr=next((x for x in cc if str(x.get("TeamId",""))==str(tids[team])),cc[0] if cc else None)
+              if tr is None: raise RuntimeError(f"no team total {season} {team}")
+              return k,(pp,tr)
+
+          cache={}; errs=[]
+          with ThreadPoolExecutor(max_workers=12) as ex:
+              futs={ex.submit(fetch_pair,k):k for k in pairs}
+              for fut in as_completed(futs):
+                  k=futs[fut]
+                  try: kk,v=fut.result(); cache[kk]=v
+                  except Exception as e: errs.append({"stage":"pair","season":k[0],"team":k[1],"error":repr(e)})
+
+          def fetch_stint(st):
+              name,season,team=st
+              pp,tr=cache[(season,team)]
+              pid=pids[name]
+              prow=next((x for x in pp if str(x.get("EntityId") or x.get("PlayerId") or x.get("RowId"))==str(pid)),None)
+              if not prow:return None
+              oo=get(ONOFF,{"Season":season,"SeasonType":"Regular Season","TeamId":str(tids[team]),"PlayerId":str(pid)})
+              stats={r.get("Stat"):r for r in (oo.get("results") or []) if isinstance(r,dict)}
+              o=stats.get("Pts per 100 Possessions"); d=stats.get("Pts per 100 Possessions - Defense")
+              if not o or not d: raise RuntimeError("missing ORtg/DRtg")
+              onop=float(prow.get("OffPoss") or 0); ondp=float(prow.get("DefPoss") or 0)
+              top=float(tr.get("OffPoss") or 0); tdp=float(tr.get("DefPoss") or 0)
+              return {"player":name,"player_id":pid,"season":season,"team":team,
+                      "minutes":float(prow.get("Minutes") or float(prow.get("SecondsPlayed") or 0)/60),
+                      "fg3a":float(prow.get("FG3A") or 0),
+                      "on_offposs":onop,"on_defposs":ondp,
+                      "on_ortg":float(prow.get("OnOffRtg")),"on_drtg":float(prow.get("OnDefRtg")),
+                      "off_offposs":max(0,top-onop),"off_defposs":max(0,tdp-ondp),
+                      "off_ortg":float(o["Off"]),"off_drtg":float(d["Off"])}
+
+          out=[]
+          with ThreadPoolExecutor(max_workers=12) as ex:
+              futs={ex.submit(fetch_stint,st):st for st in stints if (st[1],st[2]) in cache}
+              for fut in as_completed(futs):
+                  st=futs[fut]
+                  try:
+                      x=fut.result()
+                      if x: out.append(x)
+                  except Exception as e: errs.append({"stage":"stint","player":st[0],"season":st[1],"team":st[2],"error":repr(e)})
+
+          df=pd.DataFrame(out); df.to_csv("stint_details_under100.csv",index=False)
+          rows=[]
+          for name,g in df.groupby("player"):
+              def wavg(col,w):
+                  den=g[w].sum(); return (g[col]*g[w]).sum()/den if den else float("nan")
+              on_o=wavg("on_ortg","on_offposs"); on_d=wavg("on_drtg","on_defposs")
+              off_o=wavg("off_ortg","off_offposs"); off_d=wavg("off_drtg","off_defposs")
+              rows.append({"player":name,"minutes":g.minutes.sum(),"fg3a":g.fg3a.sum(),"on_ortg":on_o,"on_drtg":on_d,
+                           "on_net":on_o-on_d,"off_ortg":off_o,"off_drtg":off_d,"off_net":off_o-off_d,
+                           "swing":(on_o-on_d)-(off_o-off_d),"stints":len(g),"seasons":g.season.nunique()})
+          z=pd.DataFrame(rows)
+          z=z[(z.minutes>=3000)&(z.fg3a<100)].sort_values(["swing","minutes"],ascending=[False,False]).reset_index(drop=True)
+          z.insert(0,"rank",range(1,len(z)+1))
+          z.to_csv("nonshooter_onoff_5yr_min3000_under100.csv",index=False)
+          pd.DataFrame(errs).to_csv("errors_under100.csv",index=False)
+          print(z.to_string(index=False),flush=True)
+          print("ERRORS",len(errs),flush=True)
+          PY
+          python build.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nonshooter-onoff-under100-fast
+          path: |
+            nonshooter_onoff_5yr_min3000_under100.csv
+            stint_details_under100.csv
+            errors_under100.csv
